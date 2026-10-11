@@ -1,0 +1,17 @@
+# Beispiel-Konfiguration für secchk. Kopiere sie nach .secchk.yml ins Projekt.
+
+# Ab welchem Schweregrad der Scan mit Exit-Code 1 fehlschlägt (von --fail-on überschreibbar).
+fail_on: high
+
+ignore:
+  # Regeln, die projektweit nicht gelten sollen.
+  rules:
+    - DF003   # Image-Digest-Pinning erzwingen wir (noch) nicht
+  # Dateien/Pfade, die ignoriert werden (Globs; "dir/**" matcht den ganzen Teilbaum).
+  paths:
+    - "examples/**"
+    - "*.test.yml"
+
+# Akzeptierte Altlasten als Baseline: Fingerprints aus `secchk scan --format json`
+# (Feld "fingerprint" je Finding wird in einer späteren Version ausgegeben).
+baseline: []

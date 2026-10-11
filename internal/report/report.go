@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/linus1423/Securety-Checker/internal/discovery"
@@ -19,7 +20,7 @@ type Result struct {
 }
 
 // Formats lists the supported output formats.
-var Formats = []string{"text", "json"}
+var Formats = []string{"text", "json", "sarif"}
 
 // Write renders the result in the given format.
 func Write(w io.Writer, format string, r Result) error {
@@ -28,8 +29,10 @@ func Write(w io.Writer, format string, r Result) error {
 		return writeText(w, r)
 	case "json":
 		return writeJSON(w, r)
+	case "sarif":
+		return writeSARIF(w, r)
 	default:
-		return fmt.Errorf("unknown format %q (expected text or json)", format)
+		return fmt.Errorf("unknown format %q (expected %s)", format, strings.Join(Formats, ", "))
 	}
 }
 

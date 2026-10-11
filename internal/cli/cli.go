@@ -16,8 +16,10 @@ import (
 
 	"github.com/linus1423/Securety-Checker/internal/attack"
 	"github.com/linus1423/Securety-Checker/internal/check"
+	"github.com/linus1423/Securety-Checker/internal/config"
 	"github.com/linus1423/Securety-Checker/internal/discovery"
 	"github.com/linus1423/Securety-Checker/internal/finding"
+	"github.com/linus1423/Securety-Checker/internal/host"
 	"github.com/linus1423/Securety-Checker/internal/report"
 	"github.com/linus1423/Securety-Checker/internal/sandbox"
 	"github.com/linus1423/Securety-Checker/internal/scanner"
@@ -112,16 +114,24 @@ func newScanCmd() *cobra.Command {
 			if !validFormat(format) {
 				return fmt.Errorf("--format: unknown format %q (expected %s)", format, strings.Join(report.Formats, ", "))
 			}
-			threshold, err := finding.ParseSeverity(failOn)
-			if err != nil {
-				return fmt.Errorf("--fail-on: %w", err)
-			}
 			info, err := os.Stat(root)
 			if err != nil {
 				return err
 			}
 			if !info.IsDir() {
 				return fmt.Errorf("%s is not a directory", root)
+			}
+
+			cfg, err := config.Load(root)
+			if err != nil {
+				return fmt.Errorf("%s: %w", config.FileName, err)
+			}
+			if !cmd.Flags().Changed("fail-on") && cfg.FailOn != "" {
+				failOn = cfg.FailOn
+			}
+			threshold, err := finding.ParseSeverity(failOn)
+			if err != nil {
+				return fmt.Errorf("--fail-on: %w", err)
 			}
 
 			files, err := discovery.Walk(root)
@@ -142,6 +152,8 @@ func newScanCmd() *cobra.Command {
 				findings = append(findings, runLive(cmd, root, files, trivyTimeout, attackMode)...)
 				finding.Sort(findings)
 			}
+
+			findings = cfg.Apply(findings)
 
 			if err := report.Write(cmd.OutOrStdout(), format, report.Result{Root: root, Files: files, Findings: findings}); err != nil {
 				return err
@@ -194,6 +206,16 @@ func runLive(cmd *cobra.Command, root string, files []discovery.File, timeout ti
 			continue
 		}
 		findings = append(findings, rf...)
+	}
+
+	// Host and daemon checks run once; they need docker but not the stack.
+	hctx, hcancel := context.WithTimeout(context.Background(), timeout)
+	hf, herr := host.Check(hctx, "", "")
+	hcancel()
+	if herr != nil {
+		fmt.Fprintln(stderr, "note: host checks skipped:", herr)
+	} else {
+		findings = append(findings, hf...)
 	}
 	return findings
 }

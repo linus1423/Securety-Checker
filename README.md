@@ -2,7 +2,7 @@
 
 `secchk` ist ein Kommandozeilen-Tool, das Projekte mit Docker- und Docker-Compose-Deployment auf Sicherheitsprobleme prüft: Dockerfiles, Compose-Dateien, `.env`-Dateien und (später) die verwendeten Images.
 
-> Status: Meilenstein M4. `secchk scan --attack` startet den Stack in der Sandbox und greift ihn dynamisch an: Portscan (nmap), Web-Schwachstellen (nuclei) je Service und eine Prüfung der Netzsegmentierung im Verbund. Es fehlt noch M5 (Host-Checks, SARIF, CI).
+> Status: alle geplanten Meilensteine (M0–M5) umgesetzt. `secchk` deckt statische Analyse, Image- und Secret-Scan, Sandbox-Laufzeitprüfung, dynamische Angriffe sowie Host-/Daemon-Checks ab und gibt Text, JSON oder SARIF aus.
 
 ## Installation
 
@@ -20,6 +20,8 @@ secchk rules                       # alle Checks auflisten
 secchk scan --no-images --no-secrets .   # externe Scanner überspringen
 secchk scan --live .               # Stack in Sandbox starten und zur Laufzeit prüfen
 secchk scan --attack .             # Stack starten und dynamisch angreifen
+secchk scan --format sarif .       # SARIF für GitHub Code Scanning
+secchk scan --fail-on medium .     # Schwelle setzen (auch über .secchk.yml)
 secchk version
 ```
 
@@ -41,6 +43,20 @@ Für den Image- und Secret-Scan muss [Trivy](https://aquasecurity.github.io/triv
 
 `--live` braucht eine laufende Docker-Umgebung. Der Lauf ist daten-sicher: `secchk` startet den Stack unter einem eigenen Projektnamen, ersetzt Bind-Mounts von Host-Pfaden durch Wegwerf-Volumes, entfernt gemountete Docker-Sockets und räumt danach alles inklusive der Volumes wieder ab. Echte Daten werden nie angefasst.
 
+## Konfiguration
+
+Eine optionale `.secchk.yml` im Projekt steuert Schwelle, Ausnahmen und Baseline. Siehe [`.secchk.example.yml`](.secchk.example.yml):
+
+```yaml
+fail_on: high
+ignore:
+  rules: [DF003]
+  paths: ["examples/**"]
+baseline: []
+```
+
+Ausgabeformate: `text` (Standard), `json`, `sarif`. SARIF lässt sich in GitHub Code Scanning hochladen; ein Beispiel-Workflow liegt unter [`.github/workflows/secchk.yml`](.github/workflows/secchk.yml). Der Haupteinsatz bleibt aber lokal.
+
 ## Entwicklung
 
 ```sh
@@ -60,6 +76,8 @@ Aufbau:
 - `internal/scanner` – Adapter für externe Scanner (Trivy)
 - `internal/sandbox` – daten-sicheres Starten des Stacks und Laufzeit-Checks
 - `internal/attack` – dynamische Angriffe (nmap, nuclei, Netzsegmentierung)
+- `internal/host` – Checks für Docker-Daemon und Host
+- `internal/config` – `.secchk.yml` (Ignores, Baseline, Schwelle)
 - `internal/finding` – gemeinsames Findings-Format mit Schweregraden
 - `internal/report` – Ausgabe als Text oder JSON
 
