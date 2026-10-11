@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/linus1423/Securety-Checker/internal/discovery"
 	"github.com/linus1423/Securety-Checker/internal/finding"
 	"github.com/linus1423/Securety-Checker/internal/report"
+	"github.com/linus1423/Securety-Checker/internal/sandbox"
 	"github.com/linus1423/Securety-Checker/internal/scanner"
 )
 
@@ -95,7 +97,7 @@ func newVersionCmd() *cobra.Command {
 
 func newScanCmd() *cobra.Command {
 	var format, failOn string
-	var noImages, noSecrets bool
+	var noImages, noSecrets, live bool
 	var trivyTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "scan [path]",
@@ -135,6 +137,11 @@ func newScanCmd() *cobra.Command {
 				finding.Sort(findings)
 			}
 
+			if live {
+				findings = append(findings, runLive(cmd, root, files, trivyTimeout)...)
+				finding.Sort(findings)
+			}
+
 			if err := report.Write(cmd.OutOrStdout(), format, report.Result{Root: root, Files: files, Findings: findings}); err != nil {
 				return err
 			}
@@ -149,7 +156,36 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noImages, "no-images", false, "skip scanning referenced images for vulnerabilities (needs trivy)")
 	cmd.Flags().BoolVar(&noSecrets, "no-secrets", false, "skip scanning the project tree for secrets (needs trivy)")
 	cmd.Flags().DurationVar(&trivyTimeout, "scan-timeout", 5*time.Minute, "timeout for each external scanner invocation")
+	cmd.Flags().BoolVar(&live, "live", false, "start the Compose stack in a data-safe sandbox and check it at runtime (needs docker)")
 	return cmd
+}
+
+// runLive starts each Compose file in a sandbox and collects runtime findings.
+// Like the Trivy step it never aborts the scan: a missing Docker or a runtime
+// error is reported to stderr and the static findings still stand.
+func runLive(cmd *cobra.Command, root string, files []discovery.File, timeout time.Duration) []finding.Finding {
+	runner := sandbox.Runner{}
+	stderr := cmd.ErrOrStderr()
+	if !runner.Available() {
+		fmt.Fprintln(stderr, "note: docker compose not available; skipping --live runtime checks")
+		return nil
+	}
+	var findings []finding.Finding
+	for _, f := range files {
+		if f.Kind != discovery.KindCompose {
+			continue
+		}
+		path := filepath.Join(root, filepath.FromSlash(f.Path))
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rf, err := runner.RunFile(ctx, path)
+		cancel()
+		if err != nil {
+			fmt.Fprintf(stderr, "note: live check skipped for %s: %v\n", f.Path, err)
+			continue
+		}
+		findings = append(findings, rf...)
+	}
+	return findings
 }
 
 // runTrivy runs the Trivy adapter for image vulnerabilities and filesystem
