@@ -2,12 +2,14 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/linus1423/Securety-Checker/internal/discovery"
 	"github.com/linus1423/Securety-Checker/internal/finding"
 	"github.com/linus1423/Securety-Checker/internal/report"
+	"github.com/linus1423/Securety-Checker/internal/scanner"
 )
 
 // Version is set at build time via -ldflags "-X .../internal/cli.Version=v0.1.0".
@@ -92,6 +95,8 @@ func newVersionCmd() *cobra.Command {
 
 func newScanCmd() *cobra.Command {
 	var format, failOn string
+	var noImages, noSecrets bool
+	var trivyTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "scan [path]",
 		Short: "Scan a project directory for Dockerfile and Compose security issues",
@@ -125,6 +130,11 @@ func newScanCmd() *cobra.Command {
 				return err
 			}
 
+			if !noImages || !noSecrets {
+				findings = append(findings, runTrivy(cmd, root, files, noImages, noSecrets, trivyTimeout)...)
+				finding.Sort(findings)
+			}
+
 			if err := report.Write(cmd.OutOrStdout(), format, report.Result{Root: root, Files: files, Findings: findings}); err != nil {
 				return err
 			}
@@ -136,7 +146,46 @@ func newScanCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&format, "format", "f", "text", "output format: "+strings.Join(report.Formats, ", "))
 	cmd.Flags().StringVar(&failOn, "fail-on", "high", "exit with code 1 if a finding has at least this severity (info, low, medium, high, critical)")
+	cmd.Flags().BoolVar(&noImages, "no-images", false, "skip scanning referenced images for vulnerabilities (needs trivy)")
+	cmd.Flags().BoolVar(&noSecrets, "no-secrets", false, "skip scanning the project tree for secrets (needs trivy)")
+	cmd.Flags().DurationVar(&trivyTimeout, "scan-timeout", 5*time.Minute, "timeout for each external scanner invocation")
 	return cmd
+}
+
+// runTrivy runs the Trivy adapter for image vulnerabilities and filesystem
+// secrets. It never aborts the scan: a missing binary or a scanner error is
+// reported to stderr and the static findings still stand.
+func runTrivy(cmd *cobra.Command, root string, files []discovery.File, noImages, noSecrets bool, timeout time.Duration) []finding.Finding {
+	tv := scanner.Trivy{}
+	stderr := cmd.ErrOrStderr()
+	if !tv.Available() {
+		fmt.Fprintln(stderr, "note: trivy not found; skipping image and secret scans (install trivy to enable)")
+		return nil
+	}
+	var findings []finding.Finding
+	if !noSecrets {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		fs, err := tv.ScanFilesystemSecrets(ctx, root)
+		cancel()
+		if err != nil {
+			fmt.Fprintln(stderr, "note: secret scan skipped:", err)
+		} else {
+			findings = append(findings, fs...)
+		}
+	}
+	if !noImages {
+		for _, img := range check.ReferencedImages(root, files) {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			vf, err := tv.ScanImage(ctx, img)
+			cancel()
+			if err != nil {
+				fmt.Fprintf(stderr, "note: image scan skipped for %s: %v\n", img, err)
+				continue
+			}
+			findings = append(findings, vf...)
+		}
+	}
+	return findings
 }
 
 func validFormat(f string) bool {
