@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
+	"github.com/linus1423/Securety-Checker/internal/check"
 	"github.com/linus1423/Securety-Checker/internal/discovery"
 	"github.com/linus1423/Securety-Checker/internal/finding"
 	"github.com/linus1423/Securety-Checker/internal/report"
@@ -53,8 +55,27 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	root.AddCommand(newScanCmd(), newVersionCmd())
+	root.AddCommand(newScanCmd(), newRulesCmd(), newVersionCmd())
 	return root
+}
+
+func newRulesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rules",
+		Short: "List the available checks",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tSEVERITY\tTITLE")
+			for _, r := range check.DockerfileRules {
+				fmt.Fprintf(w, "%s\t%s\t%s\n", r.ID, r.Severity, r.Title)
+			}
+			for _, r := range check.ComposeRules {
+				fmt.Fprintf(w, "%s\t%s\t%s\n", r.ID, r.Severity, r.Title)
+			}
+			return w.Flush()
+		},
+	}
 }
 
 func newVersionCmd() *cobra.Command {
@@ -99,9 +120,10 @@ func newScanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Checks plug in here from milestone M1 on.
-			var findings []finding.Finding
-			finding.Sort(findings)
+			findings, err := check.Run(root, files)
+			if err != nil {
+				return err
+			}
 
 			if err := report.Write(cmd.OutOrStdout(), format, report.Result{Root: root, Files: files, Findings: findings}); err != nil {
 				return err

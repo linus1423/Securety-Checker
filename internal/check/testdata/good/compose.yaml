@@ -1,0 +1,10 @@
+services:
+  api:
+    image: myorg/api:1.2.3
+    read_only: true
+    user: "1000:1000"
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8080:8080"

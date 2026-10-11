@@ -13,12 +13,12 @@ func run(args ...string) (int, string, string) {
 	return code, out.String(), errOut.String()
 }
 
-func TestScanText(t *testing.T) {
-	code, out, _ := run("scan", "../discovery/testdata/project")
+func TestScanCleanProject(t *testing.T) {
+	code, out, _ := run("scan", "../check/testdata/good")
 	if code != ExitOK {
-		t.Fatalf("exit code = %d, want %d", code, ExitOK)
+		t.Fatalf("exit code = %d, want %d\n%s", code, ExitOK, out)
 	}
-	for _, want := range []string{"6 relevant file(s)", "docker-compose.yml", "No findings."} {
+	for _, want := range []string{"2 relevant file(s)", "compose.yaml", "No findings."} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -26,7 +26,7 @@ func TestScanText(t *testing.T) {
 }
 
 func TestScanJSON(t *testing.T) {
-	code, out, _ := run("scan", "--format", "json", "../discovery/testdata/project")
+	code, out, _ := run("scan", "--format", "json", "../check/testdata/good")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, ExitOK)
 	}
@@ -37,8 +37,21 @@ func TestScanJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &r); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, out)
 	}
-	if len(r.Files) != 6 || r.Findings == nil {
-		t.Errorf("got %d files, findings=%v", len(r.Files), r.Findings)
+	if len(r.Files) != 2 || r.Findings == nil || len(r.Findings) != 0 {
+		t.Errorf("got %d files, %d findings", len(r.Files), len(r.Findings))
+	}
+}
+
+func TestScanFailOn(t *testing.T) {
+	// The bad fixture has high-severity findings, so the default --fail-on high exits 1.
+	code, out, _ := run("scan", "../check/testdata/bad")
+	if code != ExitFindings {
+		t.Fatalf("exit code = %d, want %d\n%s", code, ExitFindings, out)
+	}
+	// Raising the threshold above any finding makes it pass again.
+	code, _, _ = run("scan", "--fail-on", "critical", "../check/testdata/good")
+	if code != ExitOK {
+		t.Fatalf("clean scan exit code = %d, want %d", code, ExitOK)
 	}
 }
 
