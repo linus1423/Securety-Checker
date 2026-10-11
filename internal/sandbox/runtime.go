@@ -35,6 +35,9 @@ type Container struct {
 			HostIP   string `json:"HostIp"`
 			HostPort string `json:"HostPort"`
 		} `json:"Ports"`
+		Networks map[string]struct {
+			NetworkID string `json:"NetworkID"`
+		} `json:"Networks"`
 	} `json:"NetworkSettings"`
 	State struct {
 		Health *struct {
@@ -164,6 +167,13 @@ func (r Runner) Available() bool {
 // RunFile starts one Compose file in a data-safe sandbox, inspects every
 // container and tears the stack down afterwards, returning runtime findings.
 func (r Runner) RunFile(ctx context.Context, composePath string) ([]finding.Finding, error) {
+	return r.RunFileWith(ctx, composePath, nil)
+}
+
+// RunFileWith is like RunFile but also calls during while the stack is still
+// running, so callers (the dynamic attack phase) can test the live services.
+// Its findings are appended to the runtime findings.
+func (r Runner) RunFileWith(ctx context.Context, composePath string, during func(context.Context, []Container) []finding.Finding) ([]finding.Finding, error) {
 	data, err := os.ReadFile(composePath)
 	if err != nil {
 		return nil, err
@@ -204,7 +214,11 @@ func (r Runner) RunFile(ctx context.Context, composePath string) ([]finding.Find
 	if err != nil {
 		return nil, err
 	}
-	return AnalyzeInspect(containers), nil
+	findings := AnalyzeInspect(containers)
+	if during != nil {
+		findings = append(findings, during(ctx, containers)...)
+	}
+	return findings, nil
 }
 
 func (r Runner) containerIDs(ctx context.Context, base []string) ([]string, error) {

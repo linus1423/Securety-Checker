@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/linus1423/Securety-Checker/internal/attack"
 	"github.com/linus1423/Securety-Checker/internal/check"
 	"github.com/linus1423/Securety-Checker/internal/discovery"
 	"github.com/linus1423/Securety-Checker/internal/finding"
@@ -97,7 +98,7 @@ func newVersionCmd() *cobra.Command {
 
 func newScanCmd() *cobra.Command {
 	var format, failOn string
-	var noImages, noSecrets, live bool
+	var noImages, noSecrets, live, attackMode bool
 	var trivyTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "scan [path]",
@@ -137,8 +138,8 @@ func newScanCmd() *cobra.Command {
 				finding.Sort(findings)
 			}
 
-			if live {
-				findings = append(findings, runLive(cmd, root, files, trivyTimeout)...)
+			if live || attackMode {
+				findings = append(findings, runLive(cmd, root, files, trivyTimeout, attackMode)...)
 				finding.Sort(findings)
 			}
 
@@ -157,18 +158,27 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noSecrets, "no-secrets", false, "skip scanning the project tree for secrets (needs trivy)")
 	cmd.Flags().DurationVar(&trivyTimeout, "scan-timeout", 5*time.Minute, "timeout for each external scanner invocation")
 	cmd.Flags().BoolVar(&live, "live", false, "start the Compose stack in a data-safe sandbox and check it at runtime (needs docker)")
+	cmd.Flags().BoolVar(&attackMode, "attack", false, "additionally run dynamic attacks (ports, web, segmentation) against the sandbox (implies --live; needs docker, nmap, nuclei)")
 	return cmd
 }
 
 // runLive starts each Compose file in a sandbox and collects runtime findings.
 // Like the Trivy step it never aborts the scan: a missing Docker or a runtime
 // error is reported to stderr and the static findings still stand.
-func runLive(cmd *cobra.Command, root string, files []discovery.File, timeout time.Duration) []finding.Finding {
+func runLive(cmd *cobra.Command, root string, files []discovery.File, timeout time.Duration, attackMode bool) []finding.Finding {
 	runner := sandbox.Runner{}
 	stderr := cmd.ErrOrStderr()
 	if !runner.Available() {
 		fmt.Fprintln(stderr, "note: docker compose not available; skipping --live runtime checks")
 		return nil
+	}
+	var during func(context.Context, []sandbox.Container) []finding.Finding
+	if attackMode {
+		during = func(ctx context.Context, containers []sandbox.Container) []finding.Finding {
+			return attack.Run(ctx, containers, attack.Options{
+				Notify: func(note string) { fmt.Fprintln(stderr, "note:", note) },
+			})
+		}
 	}
 	var findings []finding.Finding
 	for _, f := range files {
@@ -177,7 +187,7 @@ func runLive(cmd *cobra.Command, root string, files []discovery.File, timeout ti
 		}
 		path := filepath.Join(root, filepath.FromSlash(f.Path))
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		rf, err := runner.RunFile(ctx, path)
+		rf, err := runner.RunFileWith(ctx, path, during)
 		cancel()
 		if err != nil {
 			fmt.Fprintf(stderr, "note: live check skipped for %s: %v\n", f.Path, err)
