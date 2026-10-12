@@ -1,0 +1,51 @@
+name: "Securety Checker"
+description: "Scannt Docker- und Docker-Compose-Projekte mit secchk auf Sicherheitsprobleme."
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  path:
+    description: "Zu scannendes Verzeichnis."
+    required: false
+    default: "."
+  fail-on:
+    description: "Schweregrad, ab dem der Schritt mit Exit-Code 1 fehlschlägt (info, low, medium, high, critical)."
+    required: false
+    default: "high"
+  format:
+    description: "Ausgabeformat (text, json, sarif, html, cis)."
+    required: false
+    default: "text"
+  output:
+    description: "Optionaler Pfad, in den der Report geschrieben wird (statt stdout)."
+    required: false
+    default: ""
+  args:
+    description: "Zusätzliche Argumente für `secchk scan` (z. B. --no-images --no-secrets)."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Go einrichten
+      uses: actions/setup-go@v5
+      with:
+        go-version: "1.24"
+    - name: secchk bauen
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: go build -o "${RUNNER_TEMP}/secchk" ./cmd/secchk
+    - name: secchk ausführen
+      shell: bash
+      run: |
+        out=""
+        if [ -n "${{ inputs.output }}" ]; then
+          out="--output ${{ inputs.output }}"
+        fi
+        "${RUNNER_TEMP}/secchk" scan \
+          --fail-on "${{ inputs.fail-on }}" \
+          --format "${{ inputs.format }}" \
+          $out ${{ inputs.args }} \
+          "${{ inputs.path }}"

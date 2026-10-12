@@ -72,9 +72,9 @@ Der Vollständigkeit halber nicht aktiv ausgeführt werden aktive DoS-Angriffe (
 
 Der Lauf ist daten-sicher: `secchk` startet den Stack unter einem eigenen Projektnamen, ersetzt Bind-Mounts von Host-Pfaden durch Wegwerf-Volumes, entfernt gemountete Docker-Sockets und räumt danach alles inklusive der Volumes wieder ab. Echte Daten werden nie angefasst.
 
-## Konfiguration
+## Konfiguration / Policy
 
-Eine optionale `.secchk.yml` im Projekt steuert Schwelle, Ausnahmen und Baseline. Siehe [`.secchk.example.yml`](.secchk.example.yml):
+Eine optionale `.secchk.yml` im Projekt dient als Policy-Datei und steuert Schwelle, Ausnahmen, Baseline, Schweregrad-Overrides und dokumentierte Ausnahmen. Siehe [`.secchk.example.yml`](.secchk.example.yml):
 
 ```yaml
 fail_on: high
@@ -82,9 +82,49 @@ ignore:
   rules: [DF003]
   paths: ["examples/**"]
 baseline: []
+
+# Schweregrad einzelner Regeln projektweit anpassen (hoch- oder herabstufen).
+severity_overrides:
+  DF007: medium   # fehlender HEALTHCHECK ist uns wichtiger
+
+# Dokumentierte, akzeptierte Ausnahmen – mit Begründung und optionalem Ablauf.
+# Eine abgelaufene Ausnahme unterdrückt nicht mehr, der Befund taucht wieder auf.
+exceptions:
+  - rule: CMP007
+    path: "legacy/**"
+    reason: "Alt-Service wird in Q4 migriert"
+    expires: "2026-12-31"
 ```
 
-Ausgabeformate: `text` (Standard), `json`, `sarif`, `html`. SARIF lässt sich in GitHub Code Scanning hochladen; ein Beispiel-Workflow liegt unter [`.github/workflows/secchk.yml`](.github/workflows/secchk.yml). Der Haupteinsatz bleibt aber lokal.
+Schweregrad-Overrides und Ausnahmen werden beim Laden validiert (unbekannter Schweregrad oder ungültiges Datum führt zu einem Fehler, statt still ignoriert zu werden).
+
+Ausgabeformate: `text` (Standard), `json`, `sarif`, `html`, `cis`. SARIF lässt sich in GitHub Code Scanning hochladen. Das Format `cis` erzeugt einen CIS-Docker-Benchmark-Compliance-Report: pro abgedeckter CIS-Kontrolle PASS/FAIL samt der auslösenden Regeln (`secchk scan --format cis .`).
+
+### CI-Integration
+
+- **Beispiel-Workflow**: [`.github/workflows/secchk.yml`](.github/workflows/secchk.yml) baut `secchk` und lädt SARIF in GitHub Code Scanning hoch.
+- **GitHub Action**: Dieses Repo stellt eine zusammengesetzte Action bereit ([`action.yml`](action.yml)):
+
+  ```yaml
+  - uses: linus1423/Securety-Checker@main
+    with:
+      path: .
+      fail-on: high
+      format: sarif
+      output: secchk.sarif
+  ```
+
+- **pre-commit**: Über [`.pre-commit-hooks.yaml`](.pre-commit-hooks.yaml) lässt sich `secchk` als lokaler Hook einbinden:
+
+  ```yaml
+  repos:
+    - repo: https://github.com/linus1423/Securety-Checker
+      rev: main
+      hooks:
+        - id: secchk
+  ```
+
+Der Haupteinsatz bleibt aber lokal.
 
 ## Entwicklung
 
