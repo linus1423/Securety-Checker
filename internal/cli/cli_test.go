@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -66,6 +68,39 @@ func TestScanErrors(t *testing.T) {
 		if code, _, stderr := run(args...); code != ExitError || stderr == "" {
 			t.Errorf("%v: exit code = %d, stderr = %q; want %d with message", args, code, stderr, ExitError)
 		}
+	}
+}
+
+func TestBaselineDiff(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "baseline.txt")
+
+	// First run snapshots all current findings into the baseline and still
+	// exits 1 (the findings are reported this run).
+	code, _, _ := run("scan", "--write-baseline", base, "--fail-on", "critical", "../check/testdata/bad")
+	if code == ExitError {
+		t.Fatalf("write-baseline run errored")
+	}
+	if _, err := os.Stat(base); err != nil {
+		t.Fatalf("baseline file not written: %v", err)
+	}
+
+	// Second run diffs against the baseline: every finding is known, so none is
+	// shown and nothing trips --fail-on.
+	code, out, _ := run("scan", "--baseline", base, "../check/testdata/bad")
+	if code != ExitOK {
+		t.Fatalf("baseline-diff exit code = %d, want %d\n%s", code, ExitOK, out)
+	}
+	if !strings.Contains(out, "No findings.") {
+		t.Errorf("baseline-diff should suppress all known findings:\n%s", out)
+	}
+}
+
+func TestScanReferencesShown(t *testing.T) {
+	// The bad fixture produces findings; each should carry a remediation link.
+	_, out, _ := run("scan", "--fail-on", "critical", "../check/testdata/bad")
+	if !strings.Contains(out, "see: http") {
+		t.Errorf("expected a reference link in output:\n%s", out)
 	}
 }
 

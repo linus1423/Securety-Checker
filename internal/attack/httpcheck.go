@@ -197,7 +197,8 @@ func ProbeAPI(ctx context.Context, baseURL string) []finding.Finding {
 		if marker, ok := firstMarker(body, sqlErrorMarkers); ok {
 			out = append(out, finding.Finding{
 				RuleID: "ATK-SQLI", Title: "Mögliche SQL-Injection",
-				Severity: finding.SeverityHigh, Location: finding.Location{File: base + "/?" + param + "="},
+				Severity: finding.SeverityHigh, Confidence: finding.ConfidenceMedium,
+				Location:    finding.Location{File: base + "/?" + param + "="},
 				Message:     "Injizierter Quote löst einen SQL-Fehler aus: " + marker,
 				Remediation: "Verwende parametrisierte Queries / Prepared Statements.",
 			})

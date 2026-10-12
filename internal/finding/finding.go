@@ -55,6 +55,41 @@ func ParseSeverity(name string) (Severity, error) {
 	return 0, fmt.Errorf("unknown severity %q (expected one of %s)", name, strings.Join(severityNames, ", "))
 }
 
+// Confidence expresses how sure a check is that a finding is a true positive.
+// The zero value is High, so deterministic checks need not set it; heuristic
+// probes (e.g. reflected-error SQL injection) lower it.
+type Confidence int
+
+const (
+	ConfidenceHigh Confidence = iota
+	ConfidenceMedium
+	ConfidenceLow
+)
+
+var confidenceNames = []string{"high", "medium", "low"}
+
+func (c Confidence) String() string {
+	if c < ConfidenceHigh || c > ConfidenceLow {
+		return fmt.Sprintf("confidence(%d)", int(c))
+	}
+	return confidenceNames[c]
+}
+
+// MarshalText encodes the confidence by name.
+func (c Confidence) MarshalText() ([]byte, error) { return []byte(c.String()), nil }
+
+// UnmarshalText decodes a confidence name.
+func (c *Confidence) UnmarshalText(b []byte) error {
+	n := strings.ToLower(strings.TrimSpace(string(b)))
+	for i, name := range confidenceNames {
+		if name == n {
+			*c = Confidence(i)
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown confidence %q", b)
+}
+
 // Location points at the place in a file a finding refers to. Line is 1-based; 0 means unknown.
 type Location struct {
 	File string `json:"file"`
@@ -63,13 +98,14 @@ type Location struct {
 
 // Finding is a single security issue reported by a check.
 type Finding struct {
-	RuleID      string   `json:"rule_id"`
-	Title       string   `json:"title"`
-	Severity    Severity `json:"severity"`
-	Location    Location `json:"location"`
-	Message     string   `json:"message,omitempty"`
-	Remediation string   `json:"remediation,omitempty"`
-	References  []string `json:"references,omitempty"`
+	RuleID      string     `json:"rule_id"`
+	Title       string     `json:"title"`
+	Severity    Severity   `json:"severity"`
+	Confidence  Confidence `json:"confidence,omitempty"`
+	Location    Location   `json:"location"`
+	Message     string     `json:"message,omitempty"`
+	Remediation string     `json:"remediation,omitempty"`
+	References  []string   `json:"references,omitempty"`
 }
 
 // Fingerprint is a stable identifier for a finding, used for baselines and
@@ -124,6 +160,49 @@ func Dedup(fs []Finding) []Finding {
 		out = append(out, f)
 	}
 	return out
+}
+
+// Fingerprints returns the stable fingerprint of every finding, in order.
+func Fingerprints(fs []Finding) []string {
+	out := make([]string, len(fs))
+	for i, f := range fs {
+		out[i] = f.Fingerprint()
+	}
+	return out
+}
+
+// referenceByPrefix maps a rule-ID prefix to an authoritative remediation URL.
+// It is ordered so the most specific prefix wins.
+var referenceByPrefix = []struct{ prefix, url string }{
+	{"TRIVY", "https://aquasecurity.github.io/trivy/"},
+	{"HOST", "https://docs.docker.com/engine/security/"},
+	{"RUN", "https://docs.docker.com/engine/security/"},
+	{"DF", "https://docs.docker.com/develop/develop-images/dockerfile_best-practices/"},
+	{"CMP", "https://docs.docker.com/compose/compose-file/"},
+	{"ATK", "https://owasp.org/www-project-top-ten/"},
+}
+
+// ReferenceURL returns a best-effort remediation/reference link for a rule ID,
+// or "" when none is known.
+func ReferenceURL(ruleID string) string {
+	for _, r := range referenceByPrefix {
+		if strings.HasPrefix(ruleID, r.prefix) {
+			return r.url
+		}
+	}
+	return ""
+}
+
+// EnrichReferences fills in a default remediation link for findings that carry
+// no explicit reference, so every finding points somewhere actionable.
+func EnrichReferences(fs []Finding) {
+	for i := range fs {
+		if len(fs[i].References) == 0 {
+			if url := ReferenceURL(fs[i].RuleID); url != "" {
+				fs[i].References = []string{url}
+			}
+		}
+	}
 }
 
 // Counts returns the number of findings at each severity.

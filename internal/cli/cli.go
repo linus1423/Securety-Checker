@@ -99,7 +99,7 @@ func newVersionCmd() *cobra.Command {
 }
 
 func newScanCmd() *cobra.Command {
-	var format, failOn, outPath string
+	var format, failOn, outPath, baselineIn, writeBaseline string
 	var noImages, noSecrets, live, attackMode bool
 	var trivyTimeout time.Duration
 	cmd := &cobra.Command{
@@ -155,6 +155,23 @@ func newScanCmd() *cobra.Command {
 
 			findings = finding.Dedup(findings)
 			findings = cfg.Apply(findings)
+			finding.EnrichReferences(findings)
+
+			// Snapshot the current set before baseline suppression, so a later
+			// run can diff against it.
+			if writeBaseline != "" {
+				if err := writeFingerprints(writeBaseline, finding.Fingerprints(findings)); err != nil {
+					return fmt.Errorf("--write-baseline: %w", err)
+				}
+			}
+			// Baseline diff: show only findings not already in the baseline file.
+			if baselineIn != "" {
+				known, err := readFingerprints(baselineIn)
+				if err != nil {
+					return fmt.Errorf("--baseline: %w", err)
+				}
+				findings = suppressFingerprints(findings, known)
+			}
 
 			out := cmd.OutOrStdout()
 			if outPath != "" {
@@ -176,6 +193,8 @@ func newScanCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&format, "format", "f", "text", "output format: "+strings.Join(report.Formats, ", "))
 	cmd.Flags().StringVarP(&outPath, "output", "o", "", "write the report to this file instead of stdout")
+	cmd.Flags().StringVar(&baselineIn, "baseline", "", "suppress findings whose fingerprint is listed in this file (show only new findings)")
+	cmd.Flags().StringVar(&writeBaseline, "write-baseline", "", "write the current findings' fingerprints to this file (snapshot for --baseline)")
 	cmd.Flags().StringVar(&failOn, "fail-on", "high", "exit with code 1 if a finding has at least this severity (info, low, medium, high, critical)")
 	cmd.Flags().BoolVar(&noImages, "no-images", false, "skip scanning referenced images for vulnerabilities (needs trivy)")
 	cmd.Flags().BoolVar(&noSecrets, "no-secrets", false, "skip scanning the project tree for secrets (needs trivy)")
@@ -274,4 +293,43 @@ func validFormat(f string) bool {
 		}
 	}
 	return false
+}
+
+// readFingerprints reads a baseline file: one fingerprint per line, blank lines
+// and lines starting with '#' ignored.
+func readFingerprints(path string) (map[string]bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		out[line] = true
+	}
+	return out, nil
+}
+
+// writeFingerprints writes one fingerprint per line.
+func writeFingerprints(path string, fps []string) error {
+	var b strings.Builder
+	for _, fp := range fps {
+		b.WriteString(fp)
+		b.WriteByte('\n')
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// suppressFingerprints drops findings whose fingerprint is in known.
+func suppressFingerprints(fs []finding.Finding, known map[string]bool) []finding.Finding {
+	out := fs[:0:0]
+	for _, f := range fs {
+		if !known[f.Fingerprint()] {
+			out = append(out, f)
+		}
+	}
+	return out
 }

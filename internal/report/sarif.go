@@ -48,6 +48,7 @@ type sarifResult struct {
 	Message             sarifText         `json:"message"`
 	Locations           []sarifLocation   `json:"locations"`
 	PartialFingerprints map[string]string `json:"partialFingerprints,omitempty"`
+	Properties          map[string]string `json:"properties,omitempty"`
 }
 
 type sarifLocation struct {
@@ -97,6 +98,7 @@ func writeSARIF(w io.Writer, r Result) error {
 			Message:             sarifText{Text: msg},
 			Locations:           []sarifLocation{loc},
 			PartialFingerprints: map[string]string{"secchkFingerprint/v1": f.Fingerprint()},
+			Properties:          map[string]string{"confidence": f.Confidence.String()},
 		})
 	}
 	rules := make([]sarifRule, 0, len(rulesByID))
