@@ -33,6 +33,7 @@ func Run(ctx context.Context, containers []sandbox.Container, opts Options) []fi
 		notify("nmap nicht gefunden; Portscans werden übersprungen")
 	}
 
+	nucleiNoted := false
 	for _, tgt := range targets {
 		if hasNmap {
 			if fs, err := opts.Tools.ScanPorts(ctx, tgt.Host, tgt.Port); err != nil {
@@ -41,16 +42,28 @@ func Run(ctx context.Context, containers []sandbox.Container, opts Options) []fi
 				findings = append(findings, fs...)
 			}
 		}
+
+		// Native TLS probe (no external tool). A plaintext port simply fails the
+		// handshake, so errors are expected and ignored.
+		if fs, err := ProbeTLS(ctx, tgt.Host, tgt.Port); err == nil {
+			findings = append(findings, fs...)
+		}
+
 		if tgt.IsHTTP {
-			if !hasNuclei {
-				notify("nuclei nicht gefunden; Web-Scan wird übersprungen")
-				continue
-			}
 			url := urlFor(tgt)
-			if fs, err := opts.Tools.ScanURL(ctx, url); err != nil {
-				notify(fmt.Sprintf("Web-Scan übersprungen für %s: %v", url, err))
-			} else {
+			// Native HTTP hygiene / exposure probe (no external tool).
+			if fs, err := ProbeHTTP(ctx, url); err == nil {
 				findings = append(findings, fs...)
+			}
+			if hasNuclei {
+				if fs, err := opts.Tools.ScanURL(ctx, url); err != nil {
+					notify(fmt.Sprintf("Web-Scan übersprungen für %s: %v", url, err))
+				} else {
+					findings = append(findings, fs...)
+				}
+			} else if !nucleiNoted {
+				notify("nuclei nicht gefunden; der tiefe Web-Scan wird übersprungen (native HTTP-Checks laufen trotzdem)")
+				nucleiNoted = true
 			}
 		}
 	}

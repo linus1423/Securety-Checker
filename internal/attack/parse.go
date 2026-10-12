@@ -27,9 +27,15 @@ type nmapRun struct {
 					Version string `xml:"version,attr"`
 					Tunnel  string `xml:"tunnel,attr"`
 				} `xml:"service"`
+				Scripts []nmapScript `xml:"script"`
 			} `xml:"port"`
 		} `xml:"ports"`
 	} `xml:"host"`
+}
+
+type nmapScript struct {
+	ID     string `xml:"id,attr"`
+	Output string `xml:"output,attr"`
 }
 
 // parseNmapXML converts nmap XML into findings for the open ports found.
@@ -69,9 +75,68 @@ func parseNmapXML(data []byte, host string) ([]finding.Finding, error) {
 				Message:     desc,
 				Remediation: "Prüfe, ob dieser Port nach außen erreichbar sein muss.",
 			})
+			out = append(out, scriptFindings(p.Scripts, loc)...)
 		}
 	}
 	return out, nil
+}
+
+// weakTLSMarkers in ssl-enum-ciphers output indicate a weak TLS configuration.
+var weakTLSMarkers = []string{
+	"SSLv2", "SSLv3", "TLSv1.0", "TLSv1.1", "RC4", "DES", "3DES", "EXPORT", "NULL", "anonymous",
+	"least strength: C", "least strength: D", "least strength: E", "least strength: F",
+}
+
+// scriptFindings turns NSE script output into findings. It flags VULNERABLE
+// results, weak TLS, expired certificates and dangerous HTTP methods.
+func scriptFindings(scripts []nmapScript, loc finding.Location) []finding.Finding {
+	var out []finding.Finding
+	for _, s := range scripts {
+		switch {
+		case strings.Contains(s.Output, "VULNERABLE"):
+			out = append(out, finding.Finding{
+				RuleID: "ATK-VULN", Title: "nmap meldet VULNERABLE: " + s.ID,
+				Severity: finding.SeverityHigh, Location: loc, Message: firstLine(s.Output),
+				Remediation: "Dienst patchen oder die verwundbare Funktion abschalten.",
+			})
+		case s.ID == "ssl-enum-ciphers" && containsAny(s.Output, weakTLSMarkers):
+			out = append(out, finding.Finding{
+				RuleID: "ATK-TLS", Title: "Schwache TLS-Konfiguration",
+				Severity: finding.SeverityMedium, Location: loc, Message: firstLine(s.Output),
+				Remediation: "Deaktiviere alte Protokolle (SSLv3, TLS 1.0/1.1) und schwache Cipher.",
+			})
+		case s.ID == "ssl-cert" && (strings.Contains(s.Output, "expired") || strings.Contains(s.Output, "self-signed")):
+			out = append(out, finding.Finding{
+				RuleID: "ATK-TLS", Title: "Zertifikatsproblem",
+				Severity: finding.SeverityMedium, Location: loc, Message: firstLine(s.Output),
+				Remediation: "Gültiges, von einer CA signiertes Zertifikat verwenden.",
+			})
+		case s.ID == "http-methods" && (strings.Contains(s.Output, "PUT") || strings.Contains(s.Output, "DELETE") || strings.Contains(s.Output, "TRACE")):
+			out = append(out, finding.Finding{
+				RuleID: "ATK-HTTP", Title: "Gefährliche HTTP-Methoden erlaubt",
+				Severity: finding.SeverityLow, Location: loc, Message: firstLine(s.Output),
+				Remediation: "Erlaube nur die benötigten Methoden (GET/POST); schalte PUT/DELETE/TRACE ab.",
+			})
+		}
+	}
+	return out
+}
+
+func containsAny(s string, markers []string) bool {
+	for _, m := range markers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
 }
 
 // nucleiResult is the subset of a nuclei JSONL record we read.

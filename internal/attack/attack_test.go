@@ -1,7 +1,12 @@
 package attack
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/linus1423/Securety-Checker/internal/finding"
 	"github.com/linus1423/Securety-Checker/internal/sandbox"
@@ -108,6 +113,106 @@ func TestClusterFindings(t *testing.T) {
 	if got := clusterFindings(containers[:2]); len(got) != 0 {
 		t.Errorf("expected no finding for 2 services, got %+v", got)
 	}
+}
+
+func TestAnalyzeTLS(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	name := pkix.Name{CommonName: "self.local"}
+	selfSigned := &x509.Certificate{
+		Subject:  name,
+		Issuer:   name,
+		NotAfter: now.Add(365 * 24 * time.Hour),
+	}
+	fs := analyzeTLS(0x0301 /* TLS 1.0 */, selfSigned, "127.0.0.1:8443", now)
+	ids := ruleIDs(fs)
+	if !ids["ATK-TLS"] {
+		t.Fatalf("expected ATK-TLS findings, got %+v", fs)
+	}
+	var oldVersion, selfSignedHit bool
+	for _, f := range fs {
+		if f.Title == "Veraltete TLS-Version ausgehandelt" {
+			oldVersion = true
+		}
+		if f.Title == "Selbstsigniertes Zertifikat" {
+			selfSignedHit = true
+		}
+	}
+	if !oldVersion || !selfSignedHit {
+		t.Errorf("missing TLS findings: oldVersion=%v selfSigned=%v", oldVersion, selfSignedHit)
+	}
+
+	// Expired certificate, modern TLS version: only the expiry should fire.
+	expired := &x509.Certificate{
+		Subject:  pkix.Name{CommonName: "a"},
+		Issuer:   pkix.Name{CommonName: "b"},
+		NotAfter: now.Add(-24 * time.Hour),
+	}
+	fs = analyzeTLS(tls.VersionTLS13, expired, "127.0.0.1:8443", now)
+	var expiredHit bool
+	for _, f := range fs {
+		if f.Title == "Zertifikat abgelaufen" && f.Severity == finding.SeverityHigh {
+			expiredHit = true
+		}
+	}
+	if !expiredHit {
+		t.Errorf("expected expired-cert finding, got %+v", fs)
+	}
+}
+
+func TestAnalyzeHTTP(t *testing.T) {
+	header := http.Header{}
+	header.Set("Access-Control-Allow-Origin", "*")
+	header.Set("Access-Control-Allow-Credentials", "true")
+	header.Set("Server", "nginx/1.25.3")
+	fs := analyzeHTTP("https://127.0.0.1:8443/", http.StatusOK, header, "Index of /")
+	ids := ruleIDs(fs)
+	for _, want := range []string{"ATK-HEADER", "ATK-CORS", "ATK-INFO", "ATK-DIRLIST"} {
+		if !ids[want] {
+			t.Errorf("expected %s finding, got %+v", want, fs)
+		}
+	}
+	// ACAO * with credentials must be High.
+	for _, f := range fs {
+		if f.RuleID == "ATK-CORS" && f.Severity != finding.SeverityHigh {
+			t.Errorf("CORS with credentials should be High, got %v", f.Severity)
+		}
+	}
+
+	// A well-configured HTTP response yields no header/CORS findings.
+	good := http.Header{}
+	good.Set("Content-Security-Policy", "default-src 'self'")
+	good.Set("X-Frame-Options", "DENY")
+	good.Set("X-Content-Type-Options", "nosniff")
+	good.Set("Strict-Transport-Security", "max-age=63072000")
+	if fs := analyzeHTTP("https://127.0.0.1:8443/", http.StatusOK, good, "hello"); len(fs) != 0 {
+		t.Errorf("expected no findings for hardened response, got %+v", fs)
+	}
+}
+
+func TestScriptFindings(t *testing.T) {
+	loc := finding.Location{File: "127.0.0.1:443"}
+	scripts := []nmapScript{
+		{ID: "ssl-poodle", Output: "VULNERABLE:\n  SSL POODLE information leak"},
+		{ID: "ssl-enum-ciphers", Output: "TLSv1.0:\n  ciphers: RC4"},
+		{ID: "ssl-cert", Output: "Subject: self-signed"},
+		{ID: "http-methods", Output: "Supported Methods: GET POST PUT DELETE"},
+		{ID: "http-title", Output: "Site title"},
+	}
+	fs := scriptFindings(scripts, loc)
+	ids := ruleIDs(fs)
+	for _, want := range []string{"ATK-VULN", "ATK-TLS", "ATK-HTTP"} {
+		if !ids[want] {
+			t.Errorf("expected %s from script findings, got %+v", want, fs)
+		}
+	}
+}
+
+func ruleIDs(fs []finding.Finding) map[string]bool {
+	m := map[string]bool{}
+	for _, f := range fs {
+		m[f.RuleID] = true
+	}
+	return m
 }
 
 func TestURLFor(t *testing.T) {

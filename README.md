@@ -39,9 +39,19 @@ Verzeichnisse wie `.git`, `node_modules` und `vendor` werden übersprungen.
 
 Für den Image- und Secret-Scan muss [Trivy](https://aquasecurity.github.io/trivy/) installiert sein. Fehlt es, überspringt `secchk` diese Schritte mit einem Hinweis und prüft nur statisch.
 
-`--attack` setzt `--live` voraus und braucht zusätzlich nmap und nuclei; fehlen sie, werden die betroffenen Angriffe mit einem Hinweis übersprungen. Angegriffen wird ausschließlich die von `secchk` selbst gestartete Sandbox.
+`--attack` setzt `--live` voraus. Es greift die laufende Sandbox möglichst breit an und testet dabei auch ohne externe Tools zahlreiche Schwachstellen:
 
-`--live` braucht eine laufende Docker-Umgebung. Der Lauf ist daten-sicher: `secchk` startet den Stack unter einem eigenen Projektnamen, ersetzt Bind-Mounts von Host-Pfaden durch Wegwerf-Volumes, entfernt gemountete Docker-Sockets und räumt danach alles inklusive der Volumes wieder ab. Echte Daten werden nie angefasst.
+- **Portscan (nmap)** mit NSE-Skripten für Banner, schwache TLS-Cipher, Zertifikate, HTTP-Methoden und bekannte Verwundbarkeiten (`vuln`) – meldet unsichere Klartext-Dienste (`ATK-PORT`), `VULNERABLE`-Treffer (`ATK-VULN`), schwache TLS-Konfiguration (`ATK-TLS`) und gefährliche HTTP-Methoden (`ATK-HTTP`).
+- **Tiefer Web-Scan (nuclei)** mit DAST-Modus (`ATK-NUCLEI`).
+- **Native TLS-Prüfung** ohne externe Tools: veraltete TLS-Version, abgelaufene/bald ablaufende und selbstsignierte Zertifikate (`ATK-TLS`).
+- **Native HTTP-Prüfung** ohne externe Tools: fehlende Security-Header (`ATK-HEADER`), permissive CORS-Konfiguration (`ATK-CORS`), Versions-/Infoleaks (`ATK-INFO`), aktives Directory-Listing (`ATK-DIRLIST`) sowie exponierte sensible Pfade wie `/.env`, `/.git/config`, `/.aws/credentials` oder Spring-Actuator-Endpunkte (`ATK-EXPOSED`).
+- **Clusterprüfung**: schwache Netzsegmentierung, wenn zu viele Services ein Netz teilen (`ATK-NETSEG`).
+
+nmap und nuclei sind optional; fehlen sie, werden nur die betroffenen Angriffe mit einem Hinweis übersprungen, die nativen TLS- und HTTP-Checks laufen weiter. Angegriffen wird ausschließlich die von `secchk` selbst gestartete Sandbox.
+
+`--live` braucht eine laufende Docker-Umgebung. Zur Laufzeit prüft `secchk` die *effektive* Container-Konfiguration aus `docker inspect`, u. a. root-User, privileged, gefährliche Capabilities, gemountete Docker-Sockets, geteilte Host-Namespaces, veröffentlichte Datenbank-Ports, deaktivierte Sicherheitsprofile (`AppArmor unconfined`), fehlendes `cap_drop: ALL`, beschreibbares Root-Dateisystem und beschreibbar gemountete sensible Host-Pfade (`RUN001`–`RUN012`).
+
+Der Lauf ist daten-sicher: `secchk` startet den Stack unter einem eigenen Projektnamen, ersetzt Bind-Mounts von Host-Pfaden durch Wegwerf-Volumes, entfernt gemountete Docker-Sockets und räumt danach alles inklusive der Volumes wieder ab. Echte Daten werden nie angefasst.
 
 ## Konfiguration
 

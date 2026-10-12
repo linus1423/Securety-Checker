@@ -86,6 +86,8 @@ func TestAnalyzeInspectClean(t *testing.T) {
 	var c Container
 	c.Name = "/api"
 	c.Config.User = "1000:1000"
+	c.HostConfig.CapDrop = []string{"ALL"}
+	c.HostConfig.ReadonlyRootfs = true
 	c.State.Health = &struct {
 		Status string `json:"Status"`
 	}{Status: "healthy"}
@@ -96,6 +98,55 @@ func TestAnalyzeInspectClean(t *testing.T) {
 
 	if fs := AnalyzeInspect([]Container{c}); len(fs) != 0 {
 		t.Errorf("expected no runtime findings, got %+v", fs)
+	}
+}
+
+func TestAnalyzeInspectHardening(t *testing.T) {
+	var c Container
+	c.Name = "/web"
+	c.Config.User = "1000"
+	c.State.Health = &struct {
+		Status string `json:"Status"`
+	}{Status: "healthy"}
+	c.AppArmorProfile = "unconfined"
+	c.HostConfig.Binds = []string{"/etc:/host-etc"} // writable sensitive host path
+
+	got := ruleSet(AnalyzeInspect([]Container{c}))
+	for _, id := range []string{"RUN009", "RUN010", "RUN011", "RUN012"} {
+		if !got[id] {
+			t.Errorf("expected runtime rule %s", id)
+		}
+	}
+}
+
+func TestBindSource(t *testing.T) {
+	cases := []struct {
+		bind     string
+		src      string
+		readOnly bool
+	}{
+		{"/etc:/host-etc:ro", "/etc", true},
+		{"/etc:/host-etc", "/etc", false},
+		{"/etc:/host-etc:rw", "/etc", false},
+		{"data:/var/lib/data", "data", false},
+	}
+	for _, tc := range cases {
+		src, ro := bindSource(tc.bind)
+		if src != tc.src || ro != tc.readOnly {
+			t.Errorf("bindSource(%q) = (%q, %v), want (%q, %v)", tc.bind, src, ro, tc.src, tc.readOnly)
+		}
+	}
+	if !isSensitiveHostPath("/etc/passwd") {
+		t.Error("expected /etc/passwd to be sensitive")
+	}
+	if isSensitiveHostPath("/srv/app/data") {
+		t.Error("did not expect /srv/app/data to be sensitive")
+	}
+	if !capDropsAll([]string{"CAP_ALL"}) || !capDropsAll([]string{"ALL"}) {
+		t.Error("capDropsAll should match ALL and CAP_ALL")
+	}
+	if capDropsAll([]string{"NET_ADMIN"}) {
+		t.Error("capDropsAll should not match NET_ADMIN")
 	}
 }
 

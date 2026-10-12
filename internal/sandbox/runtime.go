@@ -16,13 +16,15 @@ import (
 
 // Container is the subset of `docker inspect` output the runtime checks use.
 type Container struct {
-	Name   string `json:"Name"`
-	Config struct {
+	Name            string `json:"Name"`
+	AppArmorProfile string `json:"AppArmorProfile"`
+	Config          struct {
 		User string `json:"User"`
 	} `json:"Config"`
 	HostConfig struct {
 		Privileged     bool     `json:"Privileged"`
 		CapAdd         []string `json:"CapAdd"`
+		CapDrop        []string `json:"CapDrop"`
 		Binds          []string `json:"Binds"`
 		NetworkMode    string   `json:"NetworkMode"`
 		PidMode        string   `json:"PidMode"`
@@ -127,6 +129,24 @@ func AnalyzeInspect(containers []Container) []finding.Finding {
 			add(c, "RUN008", "Container nicht gesund", finding.SeverityLow,
 				name+": Health "+c.State.Health.Status, "Prüfe, warum der HEALTHCHECK fehlschlägt.")
 		}
+		if c.AppArmorProfile == "unconfined" {
+			add(c, "RUN009", "AppArmor unconfined", finding.SeverityHigh,
+				name, "Lass das AppArmor-Default-Profil greifen, statt es auf unconfined zu setzen.")
+		}
+		if !capDropsAll(c.HostConfig.CapDrop) {
+			add(c, "RUN010", "Capabilities nicht per Default entzogen", finding.SeverityLow,
+				name+": kein cap_drop ALL", "Entziehe mit `cap_drop: [ALL]` alle Capabilities und füge nur die nötigen wieder hinzu.")
+		}
+		if !c.HostConfig.ReadonlyRootfs {
+			add(c, "RUN011", "Root-Dateisystem zur Laufzeit beschreibbar", finding.SeverityLow,
+				name, "Setze read_only und mounte nur die nötigen Pfade beschreibbar.")
+		}
+		for _, b := range c.HostConfig.Binds {
+			if src, ro := bindSource(b); isSensitiveHostPath(src) && !ro {
+				add(c, "RUN012", "Sensibler Host-Pfad zur Laufzeit beschreibbar gemountet", finding.SeverityHigh,
+					name+": "+b, "Mounte Systempfade nicht oder nur read-only.")
+			}
+		}
 	}
 	finding.Sort(out)
 	return out
@@ -141,6 +161,54 @@ func hostIPLabel(ip string) string {
 		return "0.0.0.0"
 	}
 	return ip
+}
+
+// capDropsAll reports whether the container drops all capabilities by default.
+func capDropsAll(caps []string) bool {
+	for _, c := range caps {
+		if strings.EqualFold(strings.TrimPrefix(strings.ToUpper(c), "CAP_"), "ALL") {
+			return true
+		}
+	}
+	return false
+}
+
+// bindSource splits a `docker inspect` bind string ("src:dst[:mode]") into its
+// host source path and whether it is mounted read-only.
+func bindSource(bind string) (src string, readOnly bool) {
+	parts := strings.Split(bind, ":")
+	if len(parts) == 0 {
+		return "", false
+	}
+	src = parts[0]
+	if len(parts) >= 3 {
+		for _, opt := range strings.Split(parts[len(parts)-1], ",") {
+			if opt == "ro" {
+				readOnly = true
+			}
+		}
+	}
+	return src, readOnly
+}
+
+// runtimeSensitiveHostPaths are host paths that must not be mounted writable.
+var runtimeSensitiveHostPaths = []string{
+	"/", "/etc", "/var/run/docker.sock", "/var/run", "/root", "/home",
+	"/boot", "/proc", "/sys", "/dev", "/var/lib/docker", "/usr", "/bin", "/sbin",
+}
+
+// isSensitiveHostPath reports whether src is (or lies under) a sensitive host path.
+func isSensitiveHostPath(src string) bool {
+	clean := filepath.Clean(src)
+	for _, p := range runtimeSensitiveHostPaths {
+		if clean == p {
+			return true
+		}
+		if p != "/" && strings.HasPrefix(clean, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // Runner orchestrates a live sandbox run via the docker CLI.
