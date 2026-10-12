@@ -20,7 +20,7 @@ type Result struct {
 }
 
 // Formats lists the supported output formats.
-var Formats = []string{"text", "json", "sarif"}
+var Formats = []string{"text", "json", "sarif", "html"}
 
 // Write renders the result in the given format.
 func Write(w io.Writer, format string, r Result) error {
@@ -31,6 +31,8 @@ func Write(w io.Writer, format string, r Result) error {
 		return writeJSON(w, r)
 	case "sarif":
 		return writeSARIF(w, r)
+	case "html":
+		return writeHTML(w, r)
 	default:
 		return fmt.Errorf("unknown format %q (expected %s)", format, strings.Join(Formats, ", "))
 	}

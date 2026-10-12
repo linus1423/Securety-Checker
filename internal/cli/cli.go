@@ -218,7 +218,8 @@ func runLive(cmd *cobra.Command, root string, files []discovery.File, timeout ti
 	if attackMode {
 		during = func(ctx context.Context, containers []sandbox.Container) []finding.Finding {
 			return attack.Run(ctx, containers, attack.Options{
-				Notify: func(note string) { fmt.Fprintln(stderr, "note:", note) },
+				Notify:   func(note string) { fmt.Fprintln(stderr, "note:", note) },
+				Progress: func(step string) { fmt.Fprintln(stderr, "..", step) },
 			})
 		}
 	}
@@ -228,6 +229,7 @@ func runLive(cmd *cobra.Command, root string, files []discovery.File, timeout ti
 			continue
 		}
 		path := filepath.Join(root, filepath.FromSlash(f.Path))
+		fmt.Fprintf(stderr, ".. Starte Sandbox für %s\n", f.Path)
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		rf, err := runner.RunFileWith(ctx, path, during)
 		cancel()

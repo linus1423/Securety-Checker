@@ -21,6 +21,7 @@ secchk scan --no-images --no-secrets .   # externe Scanner überspringen
 secchk scan --live .               # Stack in Sandbox starten und zur Laufzeit prüfen
 secchk scan --attack .             # Stack starten und dynamisch angreifen
 secchk scan --format sarif .       # SARIF für GitHub Code Scanning
+secchk scan --format html -o report.html .  # HTML-Report (light/dark) in Datei
 secchk scan --format sarif -o out.sarif .   # Report in eine Datei schreiben
 secchk scan --fail-on medium .     # Schwelle setzen (auch über .secchk.yml)
 secchk scan --write-baseline base.txt .     # aktuellen Stand als Baseline speichern
@@ -30,7 +31,7 @@ secchk version
 
 Exit-Codes: `0` keine Findings ab dem Schwellwert, `1` Findings ab dem Schwellwert (`--fail-on`, Standard `high`), `2` Fehler.
 
-Die Textausgabe endet mit einer Zusammenfassung der Findings pro Schweregrad. Mehrfach gemeldete, identische Findings (z. B. derselbe Dienst über veröffentlichten Port *und* interne Sandbox-IP) werden zusammengefasst. Die SARIF-Ausgabe enthält stabile `partialFingerprints`, damit GitHub Code Scanning Findings zuverlässig wiedererkennt. Mit `-o`/`--output` wird der Report in eine Datei statt nach stdout geschrieben.
+Die Textausgabe endet mit einer Zusammenfassung der Findings pro Schweregrad. Mehrfach gemeldete, identische Findings (z. B. derselbe Dienst über veröffentlichten Port *und* interne Sandbox-IP) werden zusammengefasst. Die SARIF-Ausgabe enthält stabile `partialFingerprints`, damit GitHub Code Scanning Findings zuverlässig wiedererkennt. Das HTML-Format (`--format html`) erzeugt einen eigenständigen, abhängigkeitsfreien Report mit Schweregrad-Badges, der sich an das helle oder dunkle Farbschema anpasst – praktisch zum Teilen oder Archivieren. Mit `-o`/`--output` wird der Report in eine Datei statt nach stdout geschrieben.
 
 Jedes Finding hat ein Confidence-Level (`high` ist Standard; heuristische Checks wie die reflektierte SQL-Fehlererkennung melden `medium`), das in Text-, JSON- und SARIF-Ausgabe erscheint und hilft, False Positives einzuordnen. Zu jeder Regel wird ein Remediation-/Referenz-Link ausgegeben (Docker-Docs, OWASP, CIS), sofern kein spezifischer vorhanden ist.
 
@@ -61,6 +62,8 @@ Für den Image- und Secret-Scan muss [Trivy](https://aquasecurity.github.io/triv
 - **Native Debug-/Admin-Endpunkt-Prüfung** ohne externe Tools: erreichbare Profiling- und Admin-Oberflächen wie Go `pprof`, `expvar`, phpMyAdmin, Adminer, Tomcat-Manager, H2-Konsole, Symfony-Profiler und Solr (`ATK-DEBUG`) – jeweils durch einen Inhalts-Marker bestätigt – sowie exponierte Framework-Debug-Seiten/Stacktraces (Django `DEBUG=True`, Flask/Werkzeug, Laravel, Rails; `ATK-DEBUG`).
 - **Clusterprüfung**: schwache Netzsegmentierung, wenn zu viele Services ein Netz teilen und ein kompromittierter Service die anderen erreichen kann (`ATK-NETSEG`).
 
+Die Angriffe laufen pro Container bzw. Ziel parallel (begrenzte Nebenläufigkeit), sodass die Angriffsphase bei mehreren Services deutlich schneller ist; währenddessen zeigt ein Fortschrittslog auf stderr (`.. …`), welcher Container/Port gerade geprüft wird.
+
 nmap und nuclei sind optional; fehlen sie, werden nur die betroffenen Angriffe mit einem Hinweis übersprungen – die nativen TLS-, HTTP-, API- und Dienst-Checks laufen trotzdem. Angegriffen wird ausschließlich die von `secchk` selbst gestartete Sandbox.
 
 Der Vollständigkeit halber nicht aktiv ausgeführt werden aktive DoS-Angriffe (z. B. Slowloris), um die Sandbox nicht lahmzulegen – stattdessen wird fehlendes CPU-/Memory-Limit als DoS-Angriffsfläche gemeldet (`RUN013`/`RUN014`). Image-Supply-Chain-Prüfungen (CVEs, unsignierte/veraltete Images) laufen über den Trivy-Scan sowie die statischen Dockerfile-Regeln (fehlender Digest-Pin, Floating-Tag).
@@ -81,7 +84,7 @@ ignore:
 baseline: []
 ```
 
-Ausgabeformate: `text` (Standard), `json`, `sarif`. SARIF lässt sich in GitHub Code Scanning hochladen; ein Beispiel-Workflow liegt unter [`.github/workflows/secchk.yml`](.github/workflows/secchk.yml). Der Haupteinsatz bleibt aber lokal.
+Ausgabeformate: `text` (Standard), `json`, `sarif`, `html`. SARIF lässt sich in GitHub Code Scanning hochladen; ein Beispiel-Workflow liegt unter [`.github/workflows/secchk.yml`](.github/workflows/secchk.yml). Der Haupteinsatz bleibt aber lokal.
 
 ## Entwicklung
 
