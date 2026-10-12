@@ -33,6 +33,7 @@ type sarifRule struct {
 	ID               string            `json:"id"`
 	Name             string            `json:"name,omitempty"`
 	ShortDescription sarifText         `json:"shortDescription"`
+	FullDescription  *sarifText        `json:"fullDescription,omitempty"`
 	HelpURI          string            `json:"helpUri,omitempty"`
 	Properties       map[string]string `json:"properties,omitempty"`
 }
@@ -42,10 +43,11 @@ type sarifText struct {
 }
 
 type sarifResult struct {
-	RuleID    string          `json:"ruleId"`
-	Level     string          `json:"level"`
-	Message   sarifText       `json:"message"`
-	Locations []sarifLocation `json:"locations"`
+	RuleID              string            `json:"ruleId"`
+	Level               string            `json:"level"`
+	Message             sarifText         `json:"message"`
+	Locations           []sarifLocation   `json:"locations"`
+	PartialFingerprints map[string]string `json:"partialFingerprints,omitempty"`
 }
 
 type sarifLocation struct {
@@ -72,6 +74,9 @@ func writeSARIF(w io.Writer, r Result) error {
 				ShortDescription: sarifText{Text: f.Title},
 				Properties:       map[string]string{"severity": f.Severity.String()},
 			}
+			if f.Remediation != "" {
+				rule.FullDescription = &sarifText{Text: f.Remediation}
+			}
 			if len(f.References) > 0 {
 				rule.HelpURI = f.References[0]
 			}
@@ -87,10 +92,11 @@ func writeSARIF(w io.Writer, r Result) error {
 			msg = f.Title + ": " + f.Message
 		}
 		results = append(results, sarifResult{
-			RuleID:    f.RuleID,
-			Level:     sarifLevel(f.Severity),
-			Message:   sarifText{Text: msg},
-			Locations: []sarifLocation{loc},
+			RuleID:              f.RuleID,
+			Level:               sarifLevel(f.Severity),
+			Message:             sarifText{Text: msg},
+			Locations:           []sarifLocation{loc},
+			PartialFingerprints: map[string]string{"secchkFingerprint/v1": f.Fingerprint()},
 		})
 	}
 	rules := make([]sarifRule, 0, len(rulesByID))

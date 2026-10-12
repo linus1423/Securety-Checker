@@ -10,7 +10,7 @@ import (
 
 func TestWriteSARIF(t *testing.T) {
 	r := Result{Findings: []finding.Finding{
-		{RuleID: "CMP007", Title: "Docker socket", Severity: finding.SeverityCritical, Location: finding.Location{File: "compose.yml", Line: 5}},
+		{RuleID: "CMP007", Title: "Docker socket", Severity: finding.SeverityCritical, Location: finding.Location{File: "compose.yml", Line: 5}, Remediation: "Remove the socket mount."},
 		{RuleID: "DF007", Title: "No healthcheck", Severity: finding.SeverityLow, Location: finding.Location{File: "Dockerfile"}},
 	}}
 	var buf bytes.Buffer
@@ -29,6 +29,15 @@ func TestWriteSARIF(t *testing.T) {
 	}
 	if log.Runs[0].Results[0].Locations[0].PhysicalLocation.Region.StartLine != 5 {
 		t.Error("missing start line in SARIF location")
+	}
+	// Stable partial fingerprint for baseline/dedup in code scanning.
+	fp := log.Runs[0].Results[0].PartialFingerprints["secchkFingerprint/v1"]
+	if fp == "" || fp != r.Findings[0].Fingerprint() {
+		t.Errorf("partialFingerprint = %q, want %q", fp, r.Findings[0].Fingerprint())
+	}
+	// Remediation flows into the rule's fullDescription.
+	if d := log.Runs[0].Tool.Driver.Rules[0].FullDescription; d == nil || d.Text != "Remove the socket mount." {
+		t.Errorf("rule fullDescription = %+v, want remediation text", d)
 	}
 }
 
