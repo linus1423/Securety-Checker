@@ -4,27 +4,71 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/linus1423/Securety-Checker/internal/finding"
 	"github.com/linus1423/Securety-Checker/internal/sandbox"
 )
 
+// defaultConcurrency bounds how many containers/targets are probed at once.
+const defaultConcurrency = 4
+
 // Options controls the dynamic attack phase.
 type Options struct {
 	Tools  Tools
 	Notify func(string) // called with human-readable notes (missing tool, errors)
+	// Progress, when set, is called with a short live-log line as each host or
+	// target is picked up, so a long attack phase shows what it is doing.
+	Progress func(string)
+	// Concurrency is the maximum number of containers/targets probed in
+	// parallel. Values <= 0 use a sensible default.
+	Concurrency int
 }
 
 // Run attacks a live sandbox: it scans every published port and probes HTTP
-// services, and checks the stack's network segmentation. It never aborts: a
-// missing tool or a tool error becomes a note and the other attacks continue.
+// services, and checks the stack's network segmentation. Containers and targets
+// are probed in parallel (bounded by Concurrency). It never aborts: a missing
+// tool or a tool error becomes a note and the other attacks continue.
 func Run(ctx context.Context, containers []sandbox.Container, opts Options) []finding.Finding {
 	notify := opts.Notify
 	if notify == nil {
 		notify = func(string) {}
 	}
-	var findings []finding.Finding
-	findings = append(findings, clusterFindings(containers)...)
+	progress := opts.Progress
+	if progress == nil {
+		progress = func(string) {}
+	}
+	conc := opts.Concurrency
+	if conc <= 0 {
+		conc = defaultConcurrency
+	}
+
+	var (
+		mu       sync.Mutex
+		findings []finding.Finding
+		wg       sync.WaitGroup
+		sem      = make(chan struct{}, conc)
+	)
+	collect := func(fs ...finding.Finding) {
+		if len(fs) == 0 {
+			return
+		}
+		mu.Lock()
+		findings = append(findings, fs...)
+		mu.Unlock()
+	}
+	// spawn runs job in a bounded worker goroutine.
+	spawn := func(job func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			job()
+		}()
+	}
+
+	collect(clusterFindings(containers)...)
 
 	targets := TargetsFromContainers(containers)
 	hasNmap := opts.Tools.HasNmap()
@@ -32,77 +76,103 @@ func Run(ctx context.Context, containers []sandbox.Container, opts Options) []fi
 	if !hasNmap && (len(targets) > 0 || len(containers) > 0) {
 		notify("nmap nicht gefunden; Portscans werden übersprungen")
 	}
+	if !hasNuclei && anyHTTP(targets) {
+		notify("nuclei nicht gefunden; der tiefe Web-Scan wird übersprungen (native HTTP-Checks laufen trotzdem)")
+	}
 
-	// Intensive full-port scan per container: find and test *every* open port of
-	// each container individually, not just the host-published ones. This scans
-	// the container's own sandbox IP, so it never reaches outside the stack.
+	// Intensive per-container scans: every open TCP port, common UDP ports and
+	// the IPv6 interface, each on the container's own sandbox IP so it never
+	// reaches outside the stack.
 	if hasNmap {
 		for _, h := range InternalScanHosts(containers) {
-			if fs, err := opts.Tools.ScanAllPorts(ctx, h.IP); err != nil {
-				notify(fmt.Sprintf("Intensiver Portscan übersprungen für %s (%s): %v", h.Service, h.IP, err))
-			} else {
-				findings = append(findings, fs...)
-			}
-			// UDP services on the same container IP (DNS, NTP, SNMP, ...).
-			if fs, err := opts.Tools.ScanUDP(ctx, h.IP); err != nil {
-				notify(fmt.Sprintf("UDP-Scan übersprungen für %s (%s): %v", h.Service, h.IP, err))
-			} else {
-				findings = append(findings, fs...)
-			}
-			// IPv6 interface, if the container has a global IPv6 address.
-			if h.IPv6 != "" {
-				if fs, err := opts.Tools.ScanIPv6(ctx, h.IPv6); err != nil {
-					notify(fmt.Sprintf("IPv6-Scan übersprungen für %s (%s): %v", h.Service, h.IPv6, err))
+			h := h
+			spawn(func() {
+				progress(fmt.Sprintf("Intensiver Portscan: %s (%s)", h.Service, h.IP))
+				if fs, err := opts.Tools.ScanAllPorts(ctx, h.IP); err != nil {
+					notify(fmt.Sprintf("Intensiver Portscan übersprungen für %s (%s): %v", h.Service, h.IP, err))
 				} else {
-					findings = append(findings, fs...)
+					collect(fs...)
 				}
-			}
+				progress(fmt.Sprintf("UDP-Scan: %s (%s)", h.Service, h.IP))
+				if fs, err := opts.Tools.ScanUDP(ctx, h.IP); err != nil {
+					notify(fmt.Sprintf("UDP-Scan übersprungen für %s (%s): %v", h.Service, h.IP, err))
+				} else {
+					collect(fs...)
+				}
+				if h.IPv6 != "" {
+					progress(fmt.Sprintf("IPv6-Scan: %s (%s)", h.Service, h.IPv6))
+					if fs, err := opts.Tools.ScanIPv6(ctx, h.IPv6); err != nil {
+						notify(fmt.Sprintf("IPv6-Scan übersprungen für %s (%s): %v", h.Service, h.IPv6, err))
+					} else {
+						collect(fs...)
+					}
+				}
+			})
 		}
 	}
 
-	nucleiNoted := false
 	for _, tgt := range targets {
-		if hasNmap {
-			if fs, err := opts.Tools.ScanPorts(ctx, tgt.Host, tgt.Port); err != nil {
-				notify(fmt.Sprintf("Portscan übersprungen für %s:%s: %v", tgt.Host, tgt.Port, err))
-			} else {
-				findings = append(findings, fs...)
-			}
-		}
-
-		// Native TLS probe (no external tool). A plaintext port simply fails the
-		// handshake, so errors are expected and ignored.
-		if fs, err := ProbeTLS(ctx, tgt.Host, tgt.Port); err == nil {
-			findings = append(findings, fs...)
-		}
-
-		// Native unauthenticated-service / default-credential probe (no external
-		// tool): unprotected DBs, caches, broker consoles, exposed Docker/Kubelet
-		// APIs and anonymous FTP.
-		findings = append(findings, ProbeServices(ctx, tgt)...)
-
-		if tgt.IsHTTP {
-			url := urlFor(tgt)
-			// Native HTTP hygiene / exposure probe (no external tool).
-			if fs, err := ProbeHTTP(ctx, url); err == nil {
-				findings = append(findings, fs...)
-			}
-			// Native API-surface and injection probe (no external tool).
-			findings = append(findings, ProbeAPI(ctx, url)...)
-			if hasNuclei {
-				if fs, err := opts.Tools.ScanURL(ctx, url); err != nil {
-					notify(fmt.Sprintf("Web-Scan übersprungen für %s: %v", url, err))
-				} else {
-					findings = append(findings, fs...)
-				}
-			} else if !nucleiNoted {
-				notify("nuclei nicht gefunden; der tiefe Web-Scan wird übersprungen (native HTTP-Checks laufen trotzdem)")
-				nucleiNoted = true
-			}
-		}
+		tgt := tgt
+		spawn(func() {
+			progress(fmt.Sprintf("Probe %s auf %s:%s", tgt.Service, tgt.Host, tgt.Port))
+			collect(probeTarget(ctx, opts.Tools, tgt, hasNmap, hasNuclei, notify)...)
+		})
 	}
+
+	wg.Wait()
 	finding.Sort(findings)
 	return findings
+}
+
+// probeTarget runs every per-target probe and returns the findings. It is
+// self-contained so it can run concurrently with other targets.
+func probeTarget(ctx context.Context, tools Tools, tgt Target, hasNmap, hasNuclei bool, notify func(string)) []finding.Finding {
+	var out []finding.Finding
+	if hasNmap {
+		if fs, err := tools.ScanPorts(ctx, tgt.Host, tgt.Port); err != nil {
+			notify(fmt.Sprintf("Portscan übersprungen für %s:%s: %v", tgt.Host, tgt.Port, err))
+		} else {
+			out = append(out, fs...)
+		}
+	}
+
+	// Native TLS probe (no external tool). A plaintext port simply fails the
+	// handshake, so errors are expected and ignored.
+	if fs, err := ProbeTLS(ctx, tgt.Host, tgt.Port); err == nil {
+		out = append(out, fs...)
+	}
+
+	// Native unauthenticated-service / default-credential probe (no external
+	// tool): unprotected DBs, caches, broker consoles, exposed Docker/Kubelet
+	// APIs and anonymous FTP.
+	out = append(out, ProbeServices(ctx, tgt)...)
+
+	if tgt.IsHTTP {
+		url := urlFor(tgt)
+		// Native HTTP hygiene / exposure probe (no external tool).
+		if fs, err := ProbeHTTP(ctx, url); err == nil {
+			out = append(out, fs...)
+		}
+		// Native API-surface and injection probe (no external tool).
+		out = append(out, ProbeAPI(ctx, url)...)
+		if hasNuclei {
+			if fs, err := tools.ScanURL(ctx, url); err != nil {
+				notify(fmt.Sprintf("Web-Scan übersprungen für %s: %v", url, err))
+			} else {
+				out = append(out, fs...)
+			}
+		}
+	}
+	return out
+}
+
+func anyHTTP(targets []Target) bool {
+	for _, t := range targets {
+		if t.IsHTTP {
+			return true
+		}
+	}
+	return false
 }
 
 // clusterFindings checks the stack as a whole for weak network segmentation:
