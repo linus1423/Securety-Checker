@@ -12,6 +12,19 @@ ignore:
     - "examples/**"
     - "*.test.yml"
 
-# Akzeptierte Altlasten als Baseline: Fingerprints aus `secchk scan --format json`
-# (Feld "fingerprint" je Finding wird in einer späteren Version ausgegeben).
+# Akzeptierte Altlasten als Baseline: Fingerprints (siehe `--write-baseline`).
 baseline: []
+
+# Schweregrad einzelner Regeln projektweit anpassen (hoch- oder herabstufen).
+# Wert muss ein gültiger Schweregrad sein (info, low, medium, high, critical).
+severity_overrides:
+  DF007: medium   # fehlender HEALTHCHECK ist uns wichtiger als "low"
+
+# Dokumentierte, akzeptierte Ausnahmen – anders als "ignore" mit Begründung und
+# optionalem Ablaufdatum. Nach Ablauf unterdrückt die Ausnahme nicht mehr, der
+# Befund taucht wieder auf und muss erneut bewertet werden.
+exceptions:
+  - rule: CMP007          # Docker-Socket-Mount
+    path: "legacy/**"     # optional; leer = jeder Pfad
+    reason: "Alt-Service wird in Q4 migriert"
+    expires: "2026-12-31" # optional; YYYY-MM-DD

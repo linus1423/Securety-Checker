@@ -1,0 +1,7 @@
+- id: secchk
+  name: secchk
+  description: Scannt Dockerfiles und Compose-Dateien auf Sicherheitsprobleme (statisch).
+  entry: secchk scan --no-images --no-secrets --fail-on high
+  language: golang
+  pass_filenames: false
+  files: (Dockerfile[^/]*|(docker-)?compose\.ya?ml|\.secchk\.yml)$
