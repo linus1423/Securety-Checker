@@ -43,6 +43,20 @@ func Run(ctx context.Context, containers []sandbox.Container, opts Options) []fi
 			} else {
 				findings = append(findings, fs...)
 			}
+			// UDP services on the same container IP (DNS, NTP, SNMP, ...).
+			if fs, err := opts.Tools.ScanUDP(ctx, h.IP); err != nil {
+				notify(fmt.Sprintf("UDP-Scan übersprungen für %s (%s): %v", h.Service, h.IP, err))
+			} else {
+				findings = append(findings, fs...)
+			}
+			// IPv6 interface, if the container has a global IPv6 address.
+			if h.IPv6 != "" {
+				if fs, err := opts.Tools.ScanIPv6(ctx, h.IPv6); err != nil {
+					notify(fmt.Sprintf("IPv6-Scan übersprungen für %s (%s): %v", h.Service, h.IPv6, err))
+				} else {
+					findings = append(findings, fs...)
+				}
+			}
 		}
 	}
 

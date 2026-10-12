@@ -89,6 +89,11 @@ var ComposeRules = []ComposeRule{
 		Remediation: "Pinne das Image auf einen konkreten Tag statt latest oder keinem Tag.",
 		Refs:        []string{cis("4.2")}, Fn: ruleComposeFloatingImage,
 	},
+	{
+		ID: "CMP014", Title: "Schwaches oder Default-Passwort in environment", Severity: finding.SeverityHigh,
+		Remediation: "Verwende ein starkes, zufälliges Passwort und halte es aus der Compose-Datei heraus (Docker-Secret oder nicht eingecheckte .env).",
+		Refs:        []string{cis("5.10"), "https://owasp.org/www-community/vulnerabilities/Use_of_hard-coded_password"}, Fn: ruleWeakPasswordCompose,
+	},
 }
 
 func ruleComposePrivileged(t *ComposeTarget) []Hit {

@@ -77,6 +77,7 @@ func TargetsFromContainers(containers []sandbox.Container) []Target {
 type ScanHost struct {
 	Service string
 	IP      string
+	IPv6    string // the container's global IPv6 address, empty when none
 }
 
 // InternalScanHosts returns each container's internal sandbox IP addresses.
@@ -93,7 +94,7 @@ func InternalScanHosts(containers []sandbox.Container) []ScanHost {
 				continue
 			}
 			seen[ip] = true
-			hosts = append(hosts, ScanHost{Service: service, IP: ip})
+			hosts = append(hosts, ScanHost{Service: service, IP: ip, IPv6: net.GlobalIPv6Address})
 		}
 	}
 	return hosts
@@ -172,6 +173,47 @@ func (t Tools) ScanAllPorts(ctx context.Context, host string) ([]finding.Finding
 		"--script", strings.Join(nmapScripts, ","),
 		"-oX", "-", host,
 	}
+	out, err := exec.CommandContext(ctx, t.nmap(), args...).Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return nil, &toolError{tool: "nmap", stderr: string(ee.Stderr), err: err}
+		}
+		return nil, err
+	}
+	return parseNmapXML(out, host)
+}
+
+// commonUDPPorts are the UDP services worth probing. A full UDP sweep is far too
+// slow, so secchk checks this curated list of services that are risky when
+// exposed (DNS, NTP, SNMP, TFTP, IKE, SSDP, mDNS, rpcbind, NetBIOS, syslog).
+var commonUDPPorts = "53,67,69,123,137,138,161,162,500,514,1194,1900,4500,5353,11211"
+
+// ScanUDP runs an nmap UDP scan over a curated list of common UDP ports of one
+// host. Like ScanAllPorts it is meant for a container's internal sandbox IP, so
+// it stays confined to the sandbox; never call it on a shared host address.
+func (t Tools) ScanUDP(ctx context.Context, host string) ([]finding.Finding, error) {
+	args := []string{
+		"-sU", "-Pn", "-T4", "-p", commonUDPPorts, "--open",
+		"--script", "banner,snmp-info,dns-recursion,ntp-monlist",
+		"-oX", "-", host,
+	}
+	return t.runNmap(ctx, host, args)
+}
+
+// ScanIPv6 runs an nmap service scan over the IPv6 address of a container. Many
+// stacks harden IPv4 but leave the IPv6 interface wide open; this catches that.
+// It is confined to the container's own sandbox IPv6 address.
+func (t Tools) ScanIPv6(ctx context.Context, ipv6 string) ([]finding.Finding, error) {
+	args := []string{
+		"-6", "-sV", "-Pn", "-T4", "-p-", "--open",
+		"--script", strings.Join(nmapScripts, ","),
+		"-oX", "-", ipv6,
+	}
+	return t.runNmap(ctx, ipv6, args)
+}
+
+// runNmap runs nmap with the given args and parses its XML output.
+func (t Tools) runNmap(ctx context.Context, host string, args []string) ([]finding.Finding, error) {
 	out, err := exec.CommandContext(ctx, t.nmap(), args...).Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {

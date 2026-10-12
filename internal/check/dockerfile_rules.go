@@ -91,6 +91,14 @@ var DockerfileRules = []DockerfileRule{
 		Refs:        []string{cis("4.1")},
 		Fn:          ruleSudo,
 	},
+	{
+		ID:          "DF010",
+		Title:       "Schwaches oder Default-Passwort in ENV/ARG",
+		Severity:    finding.SeverityHigh,
+		Remediation: "Verwende ein starkes, zufälliges Passwort und übergib es zur Laufzeit per Secret, nie als Default im Image.",
+		Refs:        []string{cis("4.10"), "https://owasp.org/www-community/vulnerabilities/Use_of_hard-coded_password"},
+		Fn:          ruleWeakPasswordDockerfile,
+	},
 }
 
 func finalStage(t *DockerfileTarget) *dockerfile.Stage {

@@ -64,7 +64,66 @@ func ProbeHTTP(ctx context.Context, baseURL string) ([]finding.Finding, error) {
 
 	out := analyzeHTTP(baseURL, resp.StatusCode, resp.Header, string(body))
 	out = append(out, probeSensitivePaths(ctx, client, baseURL)...)
+	out = append(out, probeDebugPaths(ctx, client, baseURL)...)
 	return out, nil
+}
+
+// debugPath is an admin/debug/profiling endpoint and a content marker that
+// confirms it is really that endpoint (not just any 200), to avoid false
+// positives from catch-all handlers.
+type debugPath struct {
+	path     string
+	markers  []string
+	severity finding.Severity
+	what     string
+}
+
+// debugPaths are profiling and admin consoles that must never be reachable in
+// production. Each is confirmed by a body marker.
+var debugPaths = []debugPath{
+	{"/debug/pprof/", []string{"Types of profiles available", "full goroutine stack dump", "/debug/pprof/goroutine"}, finding.SeverityHigh, "Go pprof-Profiler"},
+	{"/debug/vars", []string{"\"cmdline\"", "\"memstats\""}, finding.SeverityMedium, "expvar-Debug-Endpunkt"},
+	{"/phpmyadmin/", []string{"phpMyAdmin", "pma_"}, finding.SeverityHigh, "phpMyAdmin-Oberfläche"},
+	{"/pma/", []string{"phpMyAdmin", "pma_"}, finding.SeverityHigh, "phpMyAdmin-Oberfläche"},
+	{"/adminer.php", []string{"Adminer", "adminer"}, finding.SeverityHigh, "Adminer-DB-Oberfläche"},
+	{"/manager/html", []string{"Tomcat", "Manager"}, finding.SeverityHigh, "Tomcat-Manager"},
+	{"/h2-console/", []string{"H2 Console", "h2-console"}, finding.SeverityHigh, "H2-Datenbankkonsole"},
+	{"/_profiler/", []string{"Symfony", "Profiler"}, finding.SeverityMedium, "Symfony-Profiler"},
+	{"/solr/", []string{"Solr Admin", "solr-admin"}, finding.SeverityMedium, "Apache-Solr-Oberfläche"},
+}
+
+// probeDebugPaths requests each known debug/admin endpoint and confirms it with a
+// content marker before reporting it.
+func probeDebugPaths(ctx context.Context, client *http.Client, baseURL string) []finding.Finding {
+	base := strings.TrimRight(baseURL, "/")
+	var out []finding.Finding
+	for _, dp := range debugPaths {
+		body, status := httpGet(ctx, client, base+dp.path)
+		if status != http.StatusOK {
+			continue
+		}
+		if _, ok := firstMarker(body, dp.markers); !ok {
+			continue
+		}
+		out = append(out, finding.Finding{
+			RuleID: "ATK-DEBUG", Title: "Debug-/Admin-Endpunkt erreichbar: " + dp.what,
+			Severity: dp.severity, Location: finding.Location{File: base + dp.path},
+			Message:     "HTTP 200 auf " + dp.path,
+			Remediation: "Deaktiviere das Profiling/Admin-Interface in Produktion oder schütze es mit Authentifizierung.",
+		})
+	}
+	return out
+}
+
+// debugBodyMarkers reveal a framework debug page (stack trace / interactive
+// debugger) that leaks source paths and sometimes allows code execution.
+var debugBodyMarkers = []string{
+	"You're seeing this error because you have",          // Django DEBUG=True
+	"DJANGO_SETTINGS_MODULE",                             // Django
+	"Werkzeug Debugger",                                  // Flask/Werkzeug interactive debugger
+	"Traceback (most recent call last)",                  // Python traceback
+	"Whoops, looks like something went wrong",            // Laravel debug
+	"<title>Action Controller: Exception caught</title>", // Rails
 }
 
 // analyzeHTTP inspects a response's status, headers and body. It is pure so it
@@ -123,6 +182,18 @@ func analyzeHTTP(url string, status int, header http.Header, body string) []find
 			Remediation: "Deaktiviere das automatische Directory Listing.",
 		})
 	}
+
+	if marker, ok := firstMarker(body, debugBodyMarkers); ok {
+		out = append(out, finding.Finding{
+			RuleID: "ATK-DEBUG", Title: "Debug-Modus / Stacktrace exponiert",
+			Severity: finding.SeverityHigh, Location: loc,
+			Message:     "Debug-Seite erkannt: " + marker,
+			Remediation: "Schalte den Debug-Modus in Produktion ab; er leakt Pfade, Konfiguration und teils Code-Ausführung.",
+		})
+	}
+
+	out = append(out, analyzeCookies(url, header, isHTTPS)...)
+	out = append(out, analyzeJWTs(url, body, header)...)
 	return out
 }
 
