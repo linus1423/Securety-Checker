@@ -1,0 +1,30 @@
+# Beispiel-Workflow: secchk im CI (optional, Haupteinsatz ist lokal).
+name: secchk
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write   # für den SARIF-Upload
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: secchk bauen
+        run: go build -o secchk ./cmd/secchk
+      - name: Statisch scannen (SARIF)
+        run: ./secchk scan --no-images --no-secrets --format sarif . > secchk.sarif || true
+      - name: SARIF hochladen
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: secchk.sarif
+      - name: Scan als Gate
+        run: ./secchk scan --no-images --no-secrets --fail-on high .

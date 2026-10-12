@@ -2,6 +2,8 @@
 package finding
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -68,6 +70,13 @@ type Finding struct {
 	Message     string   `json:"message,omitempty"`
 	Remediation string   `json:"remediation,omitempty"`
 	References  []string `json:"references,omitempty"`
+}
+
+// Fingerprint is a stable identifier for a finding, used for baselines and
+// deduplication. It is independent of the message text, which may vary.
+func (f Finding) Fingerprint() string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", f.RuleID, f.Location.File, f.Location.Line)))
+	return hex.EncodeToString(sum[:8])
 }
 
 // Sort orders findings by severity (most severe first), then file, line and rule ID.

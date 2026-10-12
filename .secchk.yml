@@ -1,0 +1,7 @@
+# secchk auf das eigene Repo angewandt (Dogfooding).
+# Die Testdaten unter internal/**/testdata sind absichtlich verwundbar und
+# dienen nur den Tests, deshalb werden sie hier ausgenommen.
+ignore:
+  paths:
+    - "internal/check/testdata/**"
+    - "internal/discovery/testdata/**"

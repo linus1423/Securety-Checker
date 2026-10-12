@@ -1,0 +1,6 @@
+FROM alpine:3.20@sha256:0000000000000000000000000000000000000000000000000000000000000000
+RUN adduser -D app
+USER app
+HEALTHCHECK CMD wget -q -O- http://localhost/ || exit 1
+COPY app /app
+CMD ["/app"]

@@ -2,17 +2,27 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/linus1423/Securety-Checker/internal/attack"
+	"github.com/linus1423/Securety-Checker/internal/check"
+	"github.com/linus1423/Securety-Checker/internal/config"
 	"github.com/linus1423/Securety-Checker/internal/discovery"
 	"github.com/linus1423/Securety-Checker/internal/finding"
+	"github.com/linus1423/Securety-Checker/internal/host"
 	"github.com/linus1423/Securety-Checker/internal/report"
+	"github.com/linus1423/Securety-Checker/internal/sandbox"
+	"github.com/linus1423/Securety-Checker/internal/scanner"
 )
 
 // Version is set at build time via -ldflags "-X .../internal/cli.Version=v0.1.0".
@@ -53,8 +63,27 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	root.AddCommand(newScanCmd(), newVersionCmd())
+	root.AddCommand(newScanCmd(), newRulesCmd(), newVersionCmd())
 	return root
+}
+
+func newRulesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rules",
+		Short: "List the available checks",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tSEVERITY\tTITLE")
+			for _, r := range check.DockerfileRules {
+				fmt.Fprintf(w, "%s\t%s\t%s\n", r.ID, r.Severity, r.Title)
+			}
+			for _, r := range check.ComposeRules {
+				fmt.Fprintf(w, "%s\t%s\t%s\n", r.ID, r.Severity, r.Title)
+			}
+			return w.Flush()
+		},
+	}
 }
 
 func newVersionCmd() *cobra.Command {
@@ -71,6 +100,8 @@ func newVersionCmd() *cobra.Command {
 
 func newScanCmd() *cobra.Command {
 	var format, failOn string
+	var noImages, noSecrets, live, attackMode bool
+	var trivyTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "scan [path]",
 		Short: "Scan a project directory for Dockerfile and Compose security issues",
@@ -83,10 +114,6 @@ func newScanCmd() *cobra.Command {
 			if !validFormat(format) {
 				return fmt.Errorf("--format: unknown format %q (expected %s)", format, strings.Join(report.Formats, ", "))
 			}
-			threshold, err := finding.ParseSeverity(failOn)
-			if err != nil {
-				return fmt.Errorf("--fail-on: %w", err)
-			}
 			info, err := os.Stat(root)
 			if err != nil {
 				return err
@@ -95,13 +122,38 @@ func newScanCmd() *cobra.Command {
 				return fmt.Errorf("%s is not a directory", root)
 			}
 
+			cfg, err := config.Load(root)
+			if err != nil {
+				return fmt.Errorf("%s: %w", config.FileName, err)
+			}
+			if !cmd.Flags().Changed("fail-on") && cfg.FailOn != "" {
+				failOn = cfg.FailOn
+			}
+			threshold, err := finding.ParseSeverity(failOn)
+			if err != nil {
+				return fmt.Errorf("--fail-on: %w", err)
+			}
+
 			files, err := discovery.Walk(root)
 			if err != nil {
 				return err
 			}
-			// Checks plug in here from milestone M1 on.
-			var findings []finding.Finding
-			finding.Sort(findings)
+			findings, err := check.Run(root, files)
+			if err != nil {
+				return err
+			}
+
+			if !noImages || !noSecrets {
+				findings = append(findings, runTrivy(cmd, root, files, noImages, noSecrets, trivyTimeout)...)
+				finding.Sort(findings)
+			}
+
+			if live || attackMode {
+				findings = append(findings, runLive(cmd, root, files, trivyTimeout, attackMode)...)
+				finding.Sort(findings)
+			}
+
+			findings = cfg.Apply(findings)
 
 			if err := report.Write(cmd.OutOrStdout(), format, report.Result{Root: root, Files: files, Findings: findings}); err != nil {
 				return err
@@ -114,7 +166,94 @@ func newScanCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&format, "format", "f", "text", "output format: "+strings.Join(report.Formats, ", "))
 	cmd.Flags().StringVar(&failOn, "fail-on", "high", "exit with code 1 if a finding has at least this severity (info, low, medium, high, critical)")
+	cmd.Flags().BoolVar(&noImages, "no-images", false, "skip scanning referenced images for vulnerabilities (needs trivy)")
+	cmd.Flags().BoolVar(&noSecrets, "no-secrets", false, "skip scanning the project tree for secrets (needs trivy)")
+	cmd.Flags().DurationVar(&trivyTimeout, "scan-timeout", 5*time.Minute, "timeout for each external scanner invocation")
+	cmd.Flags().BoolVar(&live, "live", false, "start the Compose stack in a data-safe sandbox and check it at runtime (needs docker)")
+	cmd.Flags().BoolVar(&attackMode, "attack", false, "additionally run dynamic attacks (ports, web, segmentation) against the sandbox (implies --live; needs docker, nmap, nuclei)")
 	return cmd
+}
+
+// runLive starts each Compose file in a sandbox and collects runtime findings.
+// Like the Trivy step it never aborts the scan: a missing Docker or a runtime
+// error is reported to stderr and the static findings still stand.
+func runLive(cmd *cobra.Command, root string, files []discovery.File, timeout time.Duration, attackMode bool) []finding.Finding {
+	runner := sandbox.Runner{}
+	stderr := cmd.ErrOrStderr()
+	if !runner.Available() {
+		fmt.Fprintln(stderr, "note: docker compose not available; skipping --live runtime checks")
+		return nil
+	}
+	var during func(context.Context, []sandbox.Container) []finding.Finding
+	if attackMode {
+		during = func(ctx context.Context, containers []sandbox.Container) []finding.Finding {
+			return attack.Run(ctx, containers, attack.Options{
+				Notify: func(note string) { fmt.Fprintln(stderr, "note:", note) },
+			})
+		}
+	}
+	var findings []finding.Finding
+	for _, f := range files {
+		if f.Kind != discovery.KindCompose {
+			continue
+		}
+		path := filepath.Join(root, filepath.FromSlash(f.Path))
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rf, err := runner.RunFileWith(ctx, path, during)
+		cancel()
+		if err != nil {
+			fmt.Fprintf(stderr, "note: live check skipped for %s: %v\n", f.Path, err)
+			continue
+		}
+		findings = append(findings, rf...)
+	}
+
+	// Host and daemon checks run once; they need docker but not the stack.
+	hctx, hcancel := context.WithTimeout(context.Background(), timeout)
+	hf, herr := host.Check(hctx, "", "")
+	hcancel()
+	if herr != nil {
+		fmt.Fprintln(stderr, "note: host checks skipped:", herr)
+	} else {
+		findings = append(findings, hf...)
+	}
+	return findings
+}
+
+// runTrivy runs the Trivy adapter for image vulnerabilities and filesystem
+// secrets. It never aborts the scan: a missing binary or a scanner error is
+// reported to stderr and the static findings still stand.
+func runTrivy(cmd *cobra.Command, root string, files []discovery.File, noImages, noSecrets bool, timeout time.Duration) []finding.Finding {
+	tv := scanner.Trivy{}
+	stderr := cmd.ErrOrStderr()
+	if !tv.Available() {
+		fmt.Fprintln(stderr, "note: trivy not found; skipping image and secret scans (install trivy to enable)")
+		return nil
+	}
+	var findings []finding.Finding
+	if !noSecrets {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		fs, err := tv.ScanFilesystemSecrets(ctx, root)
+		cancel()
+		if err != nil {
+			fmt.Fprintln(stderr, "note: secret scan skipped:", err)
+		} else {
+			findings = append(findings, fs...)
+		}
+	}
+	if !noImages {
+		for _, img := range check.ReferencedImages(root, files) {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			vf, err := tv.ScanImage(ctx, img)
+			cancel()
+			if err != nil {
+				fmt.Fprintf(stderr, "note: image scan skipped for %s: %v\n", img, err)
+				continue
+			}
+			findings = append(findings, vf...)
+		}
+	}
+	return findings
 }
 
 func validFormat(f string) bool {
