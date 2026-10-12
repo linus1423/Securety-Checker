@@ -39,6 +39,7 @@ type Container struct {
 		} `json:"Ports"`
 		Networks map[string]struct {
 			NetworkID string `json:"NetworkID"`
+			IPAddress string `json:"IPAddress"`
 		} `json:"Networks"`
 	} `json:"NetworkSettings"`
 	State struct {
