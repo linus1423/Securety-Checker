@@ -1,5 +1,7 @@
 // Package attack runs dynamic security tests against a live sandbox: it scans
-// each service's published ports with nmap and probes HTTP services with nuclei.
+// every open port of each container individually with nmap (an intensive
+// all-ports scan of the container's own sandbox IP), scans the published host
+// ports, and probes HTTP services natively and with nuclei.
 //
 // The attacks only ever target the sandbox that secchk started itself, never a
 // production or third-party system. Each external tool is optional; a missing
@@ -56,6 +58,33 @@ func TargetsFromContainers(containers []sandbox.Container) []Target {
 	return targets
 }
 
+// ScanHost is a sandbox-internal host (one container's own IP) that can be
+// scanned across all ports without touching anything outside the sandbox.
+type ScanHost struct {
+	Service string
+	IP      string
+}
+
+// InternalScanHosts returns each container's internal sandbox IP addresses.
+// Those IPs are owned by the sandbox containers alone, so scanning every port
+// on them stays confined to the stack secchk started.
+func InternalScanHosts(containers []sandbox.Container) []ScanHost {
+	var hosts []ScanHost
+	seen := map[string]bool{}
+	for _, c := range containers {
+		service := strings.TrimPrefix(c.Name, "/")
+		for _, net := range c.NetworkSettings.Networks {
+			ip := net.IPAddress
+			if ip == "" || seen[ip] {
+				continue
+			}
+			seen[ip] = true
+			hosts = append(hosts, ScanHost{Service: service, IP: ip})
+		}
+	}
+	return hosts
+}
+
 // Tools holds the external attack tools. Empty fields use the binary names.
 type Tools struct {
 	NmapBin   string
@@ -103,6 +132,27 @@ var nmapScripts = []string{
 func (t Tools) ScanPorts(ctx context.Context, host, port string) ([]finding.Finding, error) {
 	args := []string{
 		"-sV", "-Pn", "-p", port, "--open",
+		"--script", strings.Join(nmapScripts, ","),
+		"-oX", "-", host,
+	}
+	out, err := exec.CommandContext(ctx, t.nmap(), args...).Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return nil, &toolError{tool: "nmap", stderr: string(ee.Stderr), err: err}
+		}
+		return nil, err
+	}
+	return parseNmapXML(out, host)
+}
+
+// ScanAllPorts runs an intensive nmap scan over *all* TCP ports of one host and
+// tests each open port individually with the full script set. It is meant for a
+// container's internal sandbox IP, which belongs to that container alone, so the
+// all-ports scan stays confined to the sandbox. Never call it on a shared host
+// address such as 127.0.0.1, where it would hit unrelated host services.
+func (t Tools) ScanAllPorts(ctx context.Context, host string) ([]finding.Finding, error) {
+	args := []string{
+		"-sV", "--version-all", "-Pn", "-T4", "-p-", "--open",
 		"--script", strings.Join(nmapScripts, ","),
 		"-oX", "-", host,
 	}

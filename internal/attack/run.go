@@ -29,8 +29,21 @@ func Run(ctx context.Context, containers []sandbox.Container, opts Options) []fi
 	targets := TargetsFromContainers(containers)
 	hasNmap := opts.Tools.HasNmap()
 	hasNuclei := opts.Tools.HasNuclei()
-	if len(targets) > 0 && !hasNmap {
+	if !hasNmap && (len(targets) > 0 || len(containers) > 0) {
 		notify("nmap nicht gefunden; Portscans werden übersprungen")
+	}
+
+	// Intensive full-port scan per container: find and test *every* open port of
+	// each container individually, not just the host-published ones. This scans
+	// the container's own sandbox IP, so it never reaches outside the stack.
+	if hasNmap {
+		for _, h := range InternalScanHosts(containers) {
+			if fs, err := opts.Tools.ScanAllPorts(ctx, h.IP); err != nil {
+				notify(fmt.Sprintf("Intensiver Portscan übersprungen für %s (%s): %v", h.Service, h.IP, err))
+			} else {
+				findings = append(findings, fs...)
+			}
+		}
 	}
 
 	nucleiNoted := false

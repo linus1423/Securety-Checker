@@ -101,6 +101,7 @@ func TestClusterFindings(t *testing.T) {
 		c.Name = "/" + name
 		c.NetworkSettings.Networks = map[string]struct {
 			NetworkID string `json:"NetworkID"`
+			IPAddress string `json:"IPAddress"`
 		}{net: {NetworkID: "id-" + net}}
 		return c
 	}
@@ -213,6 +214,34 @@ func ruleIDs(fs []finding.Finding) map[string]bool {
 		m[f.RuleID] = true
 	}
 	return m
+}
+
+func TestInternalScanHosts(t *testing.T) {
+	mk := func(name, net, ip string) sandbox.Container {
+		var c sandbox.Container
+		c.Name = "/" + name
+		c.NetworkSettings.Networks = map[string]struct {
+			NetworkID string `json:"NetworkID"`
+			IPAddress string `json:"IPAddress"`
+		}{net: {NetworkID: "id", IPAddress: ip}}
+		return c
+	}
+	hosts := InternalScanHosts([]sandbox.Container{
+		mk("web", "default", "172.20.0.2"),
+		mk("db", "default", "172.20.0.3"),
+		mk("noip", "default", ""), // no IP: skipped
+	})
+	if len(hosts) != 2 {
+		t.Fatalf("got %d scan hosts, want 2 (empty IP skipped)", len(hosts))
+	}
+	// A duplicate IP is only returned once.
+	dup := InternalScanHosts([]sandbox.Container{
+		mk("a", "n1", "172.20.0.2"),
+		mk("b", "n2", "172.20.0.2"),
+	})
+	if len(dup) != 1 {
+		t.Errorf("duplicate IP should collapse to 1 host, got %d", len(dup))
+	}
 }
 
 func TestURLFor(t *testing.T) {
