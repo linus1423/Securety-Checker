@@ -33,7 +33,7 @@ func TestBadFixtureFiresRules(t *testing.T) {
 	got := ruleSet(scan(t, "testdata/bad"))
 	want := []string{
 		"DF001", "DF002", "DF003", "DF004", "DF005", "DF006", "DF007", "DF008", "DF009",
-		"CMP001", "CMP002", "CMP003", "CMP004", "CMP006", "CMP007", "CMP008", "CMP010", "CMP011", "CMP013",
+		"CMP001", "CMP002", "CMP003", "CMP004", "CMP006", "CMP007", "CMP008", "CMP010", "CMP011", "CMP013", "CMP014",
 	}
 	for _, id := range want {
 		if !got[id] {

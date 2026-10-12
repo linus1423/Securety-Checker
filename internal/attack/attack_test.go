@@ -100,8 +100,9 @@ func TestClusterFindings(t *testing.T) {
 		var c sandbox.Container
 		c.Name = "/" + name
 		c.NetworkSettings.Networks = map[string]struct {
-			NetworkID string `json:"NetworkID"`
-			IPAddress string `json:"IPAddress"`
+			NetworkID         string `json:"NetworkID"`
+			IPAddress         string `json:"IPAddress"`
+			GlobalIPv6Address string `json:"GlobalIPv6Address"`
 		}{net: {NetworkID: "id-" + net}}
 		return c
 	}
@@ -222,8 +223,9 @@ func TestInternalScanHosts(t *testing.T) {
 		var c sandbox.Container
 		c.Name = "/" + name
 		c.NetworkSettings.Networks = map[string]struct {
-			NetworkID string `json:"NetworkID"`
-			IPAddress string `json:"IPAddress"`
+			NetworkID         string `json:"NetworkID"`
+			IPAddress         string `json:"IPAddress"`
+			GlobalIPv6Address string `json:"GlobalIPv6Address"`
 		}{net: {NetworkID: "id", IPAddress: ip}}
 		return c
 	}
