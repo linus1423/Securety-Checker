@@ -197,11 +197,12 @@ func TestScriptFindings(t *testing.T) {
 		{ID: "ssl-enum-ciphers", Output: "TLSv1.0:\n  ciphers: RC4"},
 		{ID: "ssl-cert", Output: "Subject: self-signed"},
 		{ID: "http-methods", Output: "Supported Methods: GET POST PUT DELETE"},
+		{ID: "ftp-anon", Output: "Anonymous FTP login allowed (FTP code 230)"},
 		{ID: "http-title", Output: "Site title"},
 	}
 	fs := scriptFindings(scripts, loc)
 	ids := ruleIDs(fs)
-	for _, want := range []string{"ATK-VULN", "ATK-TLS", "ATK-HTTP"} {
+	for _, want := range []string{"ATK-VULN", "ATK-TLS", "ATK-HTTP", "ATK-FTP"} {
 		if !ids[want] {
 			t.Errorf("expected %s from script findings, got %+v", want, fs)
 		}

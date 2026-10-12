@@ -62,12 +62,19 @@ func Run(ctx context.Context, containers []sandbox.Container, opts Options) []fi
 			findings = append(findings, fs...)
 		}
 
+		// Native unauthenticated-service / default-credential probe (no external
+		// tool): unprotected DBs, caches, broker consoles, exposed Docker/Kubelet
+		// APIs and anonymous FTP.
+		findings = append(findings, ProbeServices(ctx, tgt)...)
+
 		if tgt.IsHTTP {
 			url := urlFor(tgt)
 			// Native HTTP hygiene / exposure probe (no external tool).
 			if fs, err := ProbeHTTP(ctx, url); err == nil {
 				findings = append(findings, fs...)
 			}
+			// Native API-surface and injection probe (no external tool).
+			findings = append(findings, ProbeAPI(ctx, url)...)
 			if hasNuclei {
 				if fs, err := opts.Tools.ScanURL(ctx, url); err != nil {
 					notify(fmt.Sprintf("Web-Scan übersprungen für %s: %v", url, err))

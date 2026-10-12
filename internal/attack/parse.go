@@ -117,6 +117,12 @@ func scriptFindings(scripts []nmapScript, loc finding.Location) []finding.Findin
 				Severity: finding.SeverityLow, Location: loc, Message: firstLine(s.Output),
 				Remediation: "Erlaube nur die benötigten Methoden (GET/POST); schalte PUT/DELETE/TRACE ab.",
 			})
+		case s.ID == "ftp-anon" && strings.Contains(s.Output, "Anonymous FTP login allowed"):
+			out = append(out, finding.Finding{
+				RuleID: "ATK-FTP", Title: "Anonymer FTP-Zugriff erlaubt",
+				Severity: finding.SeverityHigh, Location: loc, Message: firstLine(s.Output),
+				Remediation: "Deaktiviere anonymen FTP-Zugriff oder ersetze FTP durch SFTP/FTPS.",
+			})
 		}
 	}
 	return out
