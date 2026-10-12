@@ -21,11 +21,14 @@ secchk scan --no-images --no-secrets .   # externe Scanner überspringen
 secchk scan --live .               # Stack in Sandbox starten und zur Laufzeit prüfen
 secchk scan --attack .             # Stack starten und dynamisch angreifen
 secchk scan --format sarif .       # SARIF für GitHub Code Scanning
+secchk scan --format sarif -o out.sarif .   # Report in eine Datei schreiben
 secchk scan --fail-on medium .     # Schwelle setzen (auch über .secchk.yml)
 secchk version
 ```
 
 Exit-Codes: `0` keine Findings ab dem Schwellwert, `1` Findings ab dem Schwellwert (`--fail-on`, Standard `high`), `2` Fehler.
+
+Die Textausgabe endet mit einer Zusammenfassung der Findings pro Schweregrad. Mehrfach gemeldete, identische Findings (z. B. derselbe Dienst über veröffentlichten Port *und* interne Sandbox-IP) werden zusammengefasst. Die SARIF-Ausgabe enthält stabile `partialFingerprints`, damit GitHub Code Scanning Findings zuverlässig wiedererkennt. Mit `-o`/`--output` wird der Report in eine Datei statt nach stdout geschrieben.
 
 Erkannte Dateien:
 

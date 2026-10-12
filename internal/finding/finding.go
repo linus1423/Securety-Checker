@@ -105,3 +105,48 @@ func AnyAtLeast(fs []Finding, min Severity) bool {
 	}
 	return false
 }
+
+// Dedup removes exact-duplicate findings, keeping the first occurrence and the
+// original order. Two findings are duplicates when they share rule, location and
+// message, as happens when the same service is reached on more than one path
+// (e.g. a published host port and the container's internal IP). Findings that
+// differ in message at the same location are kept, since they report different
+// issues.
+func Dedup(fs []Finding) []Finding {
+	seen := make(map[string]bool, len(fs))
+	out := fs[:0:0]
+	for _, f := range fs {
+		key := fmt.Sprintf("%s|%s|%d|%s", f.RuleID, f.Location.File, f.Location.Line, f.Message)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, f)
+	}
+	return out
+}
+
+// Counts returns the number of findings at each severity.
+func Counts(fs []Finding) map[Severity]int {
+	m := make(map[Severity]int, len(severityNames))
+	for _, f := range fs {
+		m[f.Severity]++
+	}
+	return m
+}
+
+// Summary renders a one-line count of findings per severity, most severe first,
+// omitting severities with no findings. It returns "" for no findings.
+func Summary(fs []Finding) string {
+	if len(fs) == 0 {
+		return ""
+	}
+	counts := Counts(fs)
+	var parts []string
+	for s := SeverityCritical; s >= SeverityInfo; s-- {
+		if n := counts[s]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, s))
+		}
+	}
+	return strings.Join(parts, ", ")
+}

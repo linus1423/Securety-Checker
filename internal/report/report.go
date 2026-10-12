@@ -74,5 +74,6 @@ func writeText(w io.Writer, r Result) error {
 			fmt.Fprintf(w, "      fix: %s\n", f.Remediation)
 		}
 	}
-	return nil
+	_, err := fmt.Fprintf(w, "\nSummary: %s\n", finding.Summary(r.Findings))
+	return err
 }

@@ -46,3 +46,37 @@ func TestSortAndThreshold(t *testing.T) {
 		t.Error("AnyAtLeast returned wrong result")
 	}
 }
+
+func TestDedup(t *testing.T) {
+	fs := []Finding{
+		{RuleID: "A", Severity: SeverityHigh, Location: Location{File: "x", Line: 1}, Message: "m"},
+		{RuleID: "A", Severity: SeverityHigh, Location: Location{File: "x", Line: 1}, Message: "m"}, // exact dup
+		{RuleID: "A", Severity: SeverityHigh, Location: Location{File: "x", Line: 1}, Message: "n"}, // different message: kept
+		{RuleID: "B", Severity: SeverityLow, Location: Location{File: "x", Line: 1}, Message: "m"},  // different rule: kept
+	}
+	got := Dedup(fs)
+	if len(got) != 3 {
+		t.Fatalf("Dedup kept %d, want 3: %+v", len(got), got)
+	}
+	// Order is preserved (first occurrence first).
+	if got[0].Message != "m" || got[1].Message != "n" || got[2].RuleID != "B" {
+		t.Errorf("Dedup changed order/content: %+v", got)
+	}
+	// Dedup must not mutate the caller's slice contents.
+	if fs[2].Message != "n" {
+		t.Error("Dedup mutated the input slice")
+	}
+}
+
+func TestSummary(t *testing.T) {
+	if s := Summary(nil); s != "" {
+		t.Errorf("Summary(nil) = %q, want empty", s)
+	}
+	fs := []Finding{
+		{Severity: SeverityCritical}, {Severity: SeverityCritical},
+		{Severity: SeverityHigh}, {Severity: SeverityLow},
+	}
+	if s := Summary(fs); s != "2 critical, 1 high, 1 low" {
+		t.Errorf("Summary = %q", s)
+	}
+}

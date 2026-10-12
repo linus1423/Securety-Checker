@@ -99,7 +99,7 @@ func newVersionCmd() *cobra.Command {
 }
 
 func newScanCmd() *cobra.Command {
-	var format, failOn string
+	var format, failOn, outPath string
 	var noImages, noSecrets, live, attackMode bool
 	var trivyTimeout time.Duration
 	cmd := &cobra.Command{
@@ -153,9 +153,19 @@ func newScanCmd() *cobra.Command {
 				finding.Sort(findings)
 			}
 
+			findings = finding.Dedup(findings)
 			findings = cfg.Apply(findings)
 
-			if err := report.Write(cmd.OutOrStdout(), format, report.Result{Root: root, Files: files, Findings: findings}); err != nil {
+			out := cmd.OutOrStdout()
+			if outPath != "" {
+				f, err := os.Create(outPath)
+				if err != nil {
+					return fmt.Errorf("--output: %w", err)
+				}
+				defer f.Close()
+				out = f
+			}
+			if err := report.Write(out, format, report.Result{Root: root, Files: files, Findings: findings}); err != nil {
 				return err
 			}
 			if finding.AnyAtLeast(findings, threshold) {
@@ -165,6 +175,7 @@ func newScanCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&format, "format", "f", "text", "output format: "+strings.Join(report.Formats, ", "))
+	cmd.Flags().StringVarP(&outPath, "output", "o", "", "write the report to this file instead of stdout")
 	cmd.Flags().StringVar(&failOn, "fail-on", "high", "exit with code 1 if a finding has at least this severity (info, low, medium, high, critical)")
 	cmd.Flags().BoolVar(&noImages, "no-images", false, "skip scanning referenced images for vulnerabilities (needs trivy)")
 	cmd.Flags().BoolVar(&noSecrets, "no-secrets", false, "skip scanning the project tree for secrets (needs trivy)")
