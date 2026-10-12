@@ -60,6 +60,9 @@ func TargetsFromContainers(containers []sandbox.Container) []Target {
 type Tools struct {
 	NmapBin   string
 	NucleiBin string
+	// DAST enables nuclei's fuzzing templates (SQLi, XSS, SSRF, LFI, cmd
+	// injection). It is more intrusive, so it runs only inside the sandbox.
+	DAST bool
 }
 
 func (t Tools) nmap() string {
@@ -87,10 +90,22 @@ func lookPath(bin string) bool {
 	return err == nil
 }
 
-// ScanPorts runs an nmap service/version scan against one host:port and returns
-// findings for the open ports it sees.
+// nmapScripts are the NSE scripts secchk runs for broad coverage: service
+// banners, TLS/crypto configuration, HTTP hygiene and the general vuln category.
+var nmapScripts = []string{
+	"banner", "ssl-cert", "ssl-enum-ciphers", "ssl-dh-params",
+	"http-security-headers", "http-methods", "http-title", "vuln",
+}
+
+// ScanPorts runs an nmap service/version scan with a broad script set against
+// one host:port and returns findings for open ports, TLS/crypto issues and any
+// VULNERABLE scripts.
 func (t Tools) ScanPorts(ctx context.Context, host, port string) ([]finding.Finding, error) {
-	args := []string{"-sV", "-Pn", "-p", port, "--open", "-oX", "-", host}
+	args := []string{
+		"-sV", "-Pn", "-p", port, "--open",
+		"--script", strings.Join(nmapScripts, ","),
+		"-oX", "-", host,
+	}
 	out, err := exec.CommandContext(ctx, t.nmap(), args...).Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -101,9 +116,14 @@ func (t Tools) ScanPorts(ctx context.Context, host, port string) ([]finding.Find
 	return parseNmapXML(out, host)
 }
 
-// ScanURL runs nuclei against one URL and returns its findings.
+// ScanURL runs nuclei against one URL and returns its findings. All template
+// categories and severities are included for the widest coverage; with DAST set
+// it also runs the fuzzing templates.
 func (t Tools) ScanURL(ctx context.Context, url string) ([]finding.Finding, error) {
 	args := []string{"-u", url, "-jsonl", "-silent", "-disable-update-check"}
+	if t.DAST {
+		args = append(args, "-dast")
+	}
 	out, err := exec.CommandContext(ctx, t.nuclei(), args...).Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
