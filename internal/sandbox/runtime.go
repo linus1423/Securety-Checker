@@ -31,6 +31,8 @@ type Container struct {
 		IpcMode        string   `json:"IpcMode"`
 		SecurityOpt    []string `json:"SecurityOpt"`
 		ReadonlyRootfs bool     `json:"ReadonlyRootfs"`
+		Memory         int64    `json:"Memory"`
+		NanoCpus       int64    `json:"NanoCpus"`
 	} `json:"HostConfig"`
 	NetworkSettings struct {
 		Ports map[string][]struct {
@@ -147,6 +149,14 @@ func AnalyzeInspect(containers []Container) []finding.Finding {
 				add(c, "RUN012", "Sensibler Host-Pfad zur Laufzeit beschreibbar gemountet", finding.SeverityHigh,
 					name+": "+b, "Mounte Systempfade nicht oder nur read-only.")
 			}
+		}
+		if c.HostConfig.Memory == 0 {
+			add(c, "RUN013", "Kein Memory-Limit zur Laufzeit", finding.SeverityLow,
+				name, "Setze `mem_limit`/`deploy.resources.limits.memory`, damit ein Container den Host nicht per OOM lahmlegt (DoS).")
+		}
+		if c.HostConfig.NanoCpus == 0 {
+			add(c, "RUN014", "Kein CPU-Limit zur Laufzeit", finding.SeverityLow,
+				name, "Setze `cpus`/`deploy.resources.limits.cpus`, damit ein Container nicht die gesamte CPU des Hosts belegt (DoS).")
 		}
 	}
 	finding.Sort(out)

@@ -1,7 +1,10 @@
 // Package attack runs dynamic security tests against a live sandbox: it scans
 // every open port of each container individually with nmap (an intensive
 // all-ports scan of the container's own sandbox IP), scans the published host
-// ports, and probes HTTP services natively and with nuclei.
+// ports, probes HTTP services natively and with nuclei, checks for
+// unauthenticated services and default credentials (databases, caches, broker
+// consoles, exposed Docker/Kubelet APIs, anonymous FTP) and probes the API
+// surface (OpenAPI/Swagger, GraphQL introspection, path traversal, SQL errors).
 //
 // The attacks only ever target the sandbox that secchk started itself, never a
 // production or third-party system. Each external tool is optional; a missing
@@ -19,10 +22,20 @@ import (
 
 // Target is one reachable endpoint of a sandbox service.
 type Target struct {
-	Service string
-	Host    string // the host address the published port is reachable on
-	Port    string
-	IsHTTP  bool
+	Service       string
+	Host          string // the host address the published port is reachable on
+	Port          string // the published host port
+	ContainerPort string // the in-container port; identifies the likely service
+	IsHTTP        bool
+}
+
+// canonicalPort returns the port that best identifies the service: the container
+// port if known, else the published port.
+func (t Target) canonicalPort() string {
+	if t.ContainerPort != "" {
+		return t.ContainerPort
+	}
+	return t.Port
 }
 
 // httpPorts are container ports that usually speak HTTP(S).
@@ -47,10 +60,11 @@ func TargetsFromContainers(containers []sandbox.Container) []Target {
 					host = "127.0.0.1"
 				}
 				targets = append(targets, Target{
-					Service: service,
-					Host:    host,
-					Port:    b.HostPort,
-					IsHTTP:  httpPorts[containerPort] || httpPorts[b.HostPort],
+					Service:       service,
+					Host:          host,
+					Port:          b.HostPort,
+					ContainerPort: containerPort,
+					IsHTTP:        httpPorts[containerPort] || httpPorts[b.HostPort],
 				})
 			}
 		}
@@ -122,8 +136,10 @@ func lookPath(bin string) bool {
 // nmapScripts are the NSE scripts secchk runs for broad coverage: service
 // banners, TLS/crypto configuration, HTTP hygiene and the general vuln category.
 var nmapScripts = []string{
-	"banner", "ssl-cert", "ssl-enum-ciphers", "ssl-dh-params",
-	"http-security-headers", "http-methods", "http-title", "vuln",
+	"banner", "ssl-cert", "ssl-enum-ciphers", "ssl-dh-params", "ssl-heartbleed",
+	"http-security-headers", "http-methods", "http-title",
+	"ftp-anon", "ssh-auth-methods", "ssh2-enum-algos",
+	"mongodb-info", "redis-info", "vuln",
 }
 
 // ScanPorts runs an nmap service/version scan with a broad script set against

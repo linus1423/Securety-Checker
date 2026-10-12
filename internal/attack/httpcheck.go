@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -123,6 +124,129 @@ func analyzeHTTP(url string, status int, header http.Header, body string) []find
 		})
 	}
 	return out
+}
+
+// apiDocPaths expose a machine-readable API specification.
+var apiDocPaths = []string{"/swagger.json", "/openapi.json", "/v2/api-docs", "/v3/api-docs", "/api-docs"}
+
+// graphQLPaths are common GraphQL endpoints.
+var graphQLPaths = []string{"/graphql", "/api/graphql", "/v1/graphql", "/query"}
+
+// sqlErrorMarkers are substrings that reveal a backend SQL error, i.e. that an
+// injected quote reached the database (possible SQL injection).
+var sqlErrorMarkers = []string{
+	"SQL syntax", "SQLSTATE", "mysql_fetch", "ORA-01756", "ORA-00933",
+	"unclosed quotation mark", "quoted string not properly terminated",
+	"pg_query", "PG::SyntaxError", "SQLiteException", "near \"'\": syntax error",
+	"You have an error in your SQL syntax",
+}
+
+// ProbeAPI tests the API surface of one HTTP(S) base URL: exposed OpenAPI/Swagger
+// specs, unauthenticated GraphQL introspection, path traversal and reflected SQL
+// errors. The injection probes send only harmless GET requests against the
+// sandbox. It needs no external tool.
+func ProbeAPI(ctx context.Context, baseURL string) []finding.Finding {
+	client := httpClient()
+	base := strings.TrimRight(baseURL, "/")
+	var out []finding.Finding
+
+	// Exposed API documentation.
+	for _, p := range apiDocPaths {
+		body, status := httpGet(ctx, client, base+p)
+		if status == http.StatusOK && containsAny(body, []string{"\"swagger\"", "\"openapi\"", "\"paths\""}) {
+			out = append(out, finding.Finding{
+				RuleID: "ATK-APIDOC", Title: "API-Spezifikation öffentlich erreichbar",
+				Severity: finding.SeverityLow, Location: finding.Location{File: base + p},
+				Message:     "OpenAPI/Swagger-Dokument ohne Authentifizierung abrufbar",
+				Remediation: "Schütze die API-Dokumentation oder stelle sie nicht öffentlich bereit.",
+			})
+			break
+		}
+	}
+
+	// GraphQL introspection enabled.
+	for _, p := range graphQLPaths {
+		if graphQLIntrospection(ctx, client, base+p) {
+			out = append(out, finding.Finding{
+				RuleID: "ATK-GRAPHQL", Title: "GraphQL-Introspection aktiviert",
+				Severity: finding.SeverityMedium, Location: finding.Location{File: base + p},
+				Message:     "Das vollständige Schema ist ohne Authentifizierung abrufbar",
+				Remediation: "Deaktiviere die Introspection in Produktion oder erfordere Authentifizierung.",
+			})
+			break
+		}
+	}
+
+	// Path traversal.
+	for _, probe := range []string{"/../../../../../../etc/passwd", "/..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"} {
+		body, status := httpGet(ctx, client, base+probe)
+		if status == http.StatusOK && rootPasswdRe.MatchString(body) {
+			out = append(out, finding.Finding{
+				RuleID: "ATK-TRAVERSAL", Title: "Path Traversal möglich",
+				Severity: finding.SeverityCritical, Location: finding.Location{File: base + probe},
+				Message:     "/etc/passwd konnte über die URL gelesen werden",
+				Remediation: "Normalisiere und validiere Pfadangaben; verlasse nie das erlaubte Verzeichnis.",
+			})
+			break
+		}
+	}
+
+	// Reflected SQL error (possible SQL injection).
+	for _, param := range []string{"id", "q", "search", "user"} {
+		body, _ := httpGet(ctx, client, base+"/?"+param+"=1%27")
+		if marker, ok := firstMarker(body, sqlErrorMarkers); ok {
+			out = append(out, finding.Finding{
+				RuleID: "ATK-SQLI", Title: "Mögliche SQL-Injection",
+				Severity: finding.SeverityHigh, Location: finding.Location{File: base + "/?" + param + "="},
+				Message:     "Injizierter Quote löst einen SQL-Fehler aus: " + marker,
+				Remediation: "Verwende parametrisierte Queries / Prepared Statements.",
+			})
+			break
+		}
+	}
+	return out
+}
+
+// rootPasswdRe matches an /etc/passwd root line.
+var rootPasswdRe = regexp.MustCompile(`root:.*:0:0:`)
+
+func httpGet(ctx context.Context, client *http.Client, url string) (body string, status int) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", 0
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0
+	}
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	resp.Body.Close()
+	return string(b), resp.StatusCode
+}
+
+func graphQLIntrospection(ctx context.Context, client *http.Client, url string) bool {
+	payload := `{"query":"{__schema{queryType{name}}}"}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK && strings.Contains(string(body), "__schema") && strings.Contains(string(body), "queryType")
+}
+
+func firstMarker(s string, markers []string) (string, bool) {
+	for _, m := range markers {
+		if strings.Contains(s, m) {
+			return m, true
+		}
+	}
+	return "", false
 }
 
 func probeSensitivePaths(ctx context.Context, client *http.Client, baseURL string) []finding.Finding {

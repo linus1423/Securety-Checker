@@ -88,6 +88,8 @@ func TestAnalyzeInspectClean(t *testing.T) {
 	c.Config.User = "1000:1000"
 	c.HostConfig.CapDrop = []string{"ALL"}
 	c.HostConfig.ReadonlyRootfs = true
+	c.HostConfig.Memory = 256 * 1024 * 1024
+	c.HostConfig.NanoCpus = 500_000_000
 	c.State.Health = &struct {
 		Status string `json:"Status"`
 	}{Status: "healthy"}
@@ -112,7 +114,7 @@ func TestAnalyzeInspectHardening(t *testing.T) {
 	c.HostConfig.Binds = []string{"/etc:/host-etc"} // writable sensitive host path
 
 	got := ruleSet(AnalyzeInspect([]Container{c}))
-	for _, id := range []string{"RUN009", "RUN010", "RUN011", "RUN012"} {
+	for _, id := range []string{"RUN009", "RUN010", "RUN011", "RUN012", "RUN013", "RUN014"} {
 		if !got[id] {
 			t.Errorf("expected runtime rule %s", id)
 		}
