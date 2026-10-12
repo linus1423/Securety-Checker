@@ -23,12 +23,18 @@ secchk scan --attack .             # Stack starten und dynamisch angreifen
 secchk scan --format sarif .       # SARIF für GitHub Code Scanning
 secchk scan --format sarif -o out.sarif .   # Report in eine Datei schreiben
 secchk scan --fail-on medium .     # Schwelle setzen (auch über .secchk.yml)
+secchk scan --write-baseline base.txt .     # aktuellen Stand als Baseline speichern
+secchk scan --baseline base.txt .           # nur neue Findings gegenüber der Baseline zeigen
 secchk version
 ```
 
 Exit-Codes: `0` keine Findings ab dem Schwellwert, `1` Findings ab dem Schwellwert (`--fail-on`, Standard `high`), `2` Fehler.
 
 Die Textausgabe endet mit einer Zusammenfassung der Findings pro Schweregrad. Mehrfach gemeldete, identische Findings (z. B. derselbe Dienst über veröffentlichten Port *und* interne Sandbox-IP) werden zusammengefasst. Die SARIF-Ausgabe enthält stabile `partialFingerprints`, damit GitHub Code Scanning Findings zuverlässig wiedererkennt. Mit `-o`/`--output` wird der Report in eine Datei statt nach stdout geschrieben.
+
+Jedes Finding hat ein Confidence-Level (`high` ist Standard; heuristische Checks wie die reflektierte SQL-Fehlererkennung melden `medium`), das in Text-, JSON- und SARIF-Ausgabe erscheint und hilft, False Positives einzuordnen. Zu jeder Regel wird ein Remediation-/Referenz-Link ausgegeben (Docker-Docs, OWASP, CIS), sofern kein spezifischer vorhanden ist.
+
+Für CI eignet sich der Baseline-Diff: `--write-baseline <datei>` speichert die Fingerprints des aktuellen Laufs, `--baseline <datei>` blendet alle dort bekannten Findings aus, sodass nur neue angezeigt werden (und nur diese `--fail-on` auslösen).
 
 Erkannte Dateien:
 

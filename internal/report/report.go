@@ -69,9 +69,16 @@ func writeText(w io.Writer, r Result) error {
 		if f.Location.Line > 0 {
 			loc = fmt.Sprintf("%s:%d", loc, f.Location.Line)
 		}
-		fmt.Fprintf(w, "  [%s] %s %s: %s\n", f.Severity, f.RuleID, loc, f.Title)
+		title := f.Title
+		if f.Confidence != finding.ConfidenceHigh {
+			title = fmt.Sprintf("%s (confidence: %s)", title, f.Confidence)
+		}
+		fmt.Fprintf(w, "  [%s] %s %s: %s\n", f.Severity, f.RuleID, loc, title)
 		if f.Remediation != "" {
 			fmt.Fprintf(w, "      fix: %s\n", f.Remediation)
+		}
+		if len(f.References) > 0 {
+			fmt.Fprintf(w, "      see: %s\n", f.References[0])
 		}
 	}
 	_, err := fmt.Fprintf(w, "\nSummary: %s\n", finding.Summary(r.Findings))

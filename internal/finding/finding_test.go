@@ -2,6 +2,7 @@ package finding
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -65,6 +66,56 @@ func TestDedup(t *testing.T) {
 	// Dedup must not mutate the caller's slice contents.
 	if fs[2].Message != "n" {
 		t.Error("Dedup mutated the input slice")
+	}
+}
+
+func TestConfidenceJSON(t *testing.T) {
+	// High is the zero value and is omitted from JSON.
+	b, _ := json.Marshal(Finding{RuleID: "X", Confidence: ConfidenceHigh})
+	if strings.Contains(string(b), "confidence") {
+		t.Errorf("high confidence should be omitted: %s", b)
+	}
+	b, _ = json.Marshal(Finding{RuleID: "X", Confidence: ConfidenceMedium})
+	var f Finding
+	if err := json.Unmarshal(b, &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Confidence != ConfidenceMedium {
+		t.Errorf("round trip confidence = %v, want medium (json %s)", f.Confidence, b)
+	}
+}
+
+func TestReferenceURLAndEnrich(t *testing.T) {
+	if ReferenceURL("DF003") == "" || ReferenceURL("CMP007") == "" || ReferenceURL("ATK-SQLI") == "" {
+		t.Error("expected reference URLs for known rule prefixes")
+	}
+	if ReferenceURL("UNKNOWN123") != "" {
+		t.Error("expected no reference URL for an unknown prefix")
+	}
+	fs := []Finding{
+		{RuleID: "DF003"},
+		{RuleID: "CMP007", References: []string{"https://example.test/custom"}},
+	}
+	EnrichReferences(fs)
+	if len(fs[0].References) != 1 || fs[0].References[0] == "" {
+		t.Errorf("DF003 should get a default reference, got %+v", fs[0].References)
+	}
+	if fs[1].References[0] != "https://example.test/custom" {
+		t.Error("EnrichReferences must not overwrite an explicit reference")
+	}
+}
+
+func TestFingerprints(t *testing.T) {
+	fs := []Finding{
+		{RuleID: "A", Location: Location{File: "x", Line: 1}},
+		{RuleID: "A", Location: Location{File: "x", Line: 2}},
+	}
+	fps := Fingerprints(fs)
+	if len(fps) != 2 || fps[0] == fps[1] {
+		t.Errorf("Fingerprints = %v, want two distinct", fps)
+	}
+	if fps[0] != fs[0].Fingerprint() {
+		t.Error("Fingerprints disagree with Finding.Fingerprint")
 	}
 }
 
