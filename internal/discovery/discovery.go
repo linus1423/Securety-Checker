@@ -39,8 +39,8 @@ func Classify(name string) (Kind, bool) {
 	lower := strings.ToLower(name)
 	switch {
 	case lower == "dockerfile", lower == "containerfile",
-		strings.HasPrefix(lower, "dockerfile."), strings.HasPrefix(lower, "containerfile."),
-		strings.HasSuffix(lower, ".dockerfile"), strings.HasSuffix(lower, ".containerfile"):
+		strings.HasSuffix(lower, ".dockerfile"), strings.HasSuffix(lower, ".containerfile"),
+		isDockerfileVariant(lower):
 		return KindDockerfile, true
 	case isCompose(lower):
 		return KindCompose, true
@@ -48,6 +48,26 @@ func Classify(name string) (Kind, bool) {
 		return KindEnv, true
 	}
 	return "", false
+}
+
+// nonDockerExts are extensions that mark a "Dockerfile.<x>" name as something
+// other than a Dockerfile variant (e.g. dockerfile.go, a source file).
+var nonDockerExts = map[string]bool{
+	".go": true, ".md": true, ".txt": true, ".rst": true, ".json": true,
+	".yml": true, ".yaml": true, ".toml": true, ".ini": true, ".cfg": true,
+	".sh": true, ".py": true, ".js": true, ".ts": true, ".rb": true,
+	".lock": true, ".sum": true, ".mod": true, ".bak": true, ".orig": true,
+	".swp": true, ".tmpl": true, ".html": true, ".xml": true,
+}
+
+// isDockerfileVariant reports whether a "dockerfile.<suffix>" or
+// "containerfile.<suffix>" name is a Dockerfile variant (e.g. Dockerfile.prod)
+// rather than a source file that merely starts with the word (e.g. dockerfile.go).
+func isDockerfileVariant(lower string) bool {
+	if !strings.HasPrefix(lower, "dockerfile.") && !strings.HasPrefix(lower, "containerfile.") {
+		return false
+	}
+	return !nonDockerExts[filepath.Ext(lower)]
 }
 
 func isCompose(lower string) bool {
